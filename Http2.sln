@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 15
+VisualStudioVersion = 15.0.25914.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Hpack", "Hpack\Hpack.csproj", "{F86F63E7-55B2-4776-BF1F-F8AFFDCF3355}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HpackTests", "HpackTests\HpackTests.csproj", "{AB4E7AD2-5778-485D-BE8D-9A7268C35B2E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Http2", "Http2\Http2.csproj", "{6B80E5BC-D4AA-4C15-BE02-63270F042157}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F86F63E7-55B2-4776-BF1F-F8AFFDCF3355}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F86F63E7-55B2-4776-BF1F-F8AFFDCF3355}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F86F63E7-55B2-4776-BF1F-F8AFFDCF3355}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F86F63E7-55B2-4776-BF1F-F8AFFDCF3355}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AB4E7AD2-5778-485D-BE8D-9A7268C35B2E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AB4E7AD2-5778-485D-BE8D-9A7268C35B2E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AB4E7AD2-5778-485D-BE8D-9A7268C35B2E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AB4E7AD2-5778-485D-BE8D-9A7268C35B2E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6B80E5BC-D4AA-4C15-BE02-63270F042157}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6B80E5BC-D4AA-4C15-BE02-63270F042157}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6B80E5BC-D4AA-4C15-BE02-63270F042157}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6B80E5BC-D4AA-4C15-BE02-63270F042157}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

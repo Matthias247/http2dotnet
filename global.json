@@ -1,0 +1,3 @@
+{
+  "projects": [ "Hpack", "Http2", "HpackTests" ]
+}
