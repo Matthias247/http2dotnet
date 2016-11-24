@@ -29,6 +29,15 @@ namespace HpackTests
             foreach (var b in bytes) WriteByte(b);
         }
 
+        public void AddHexString(string s)
+        {
+            var byteBuf = new byte[2];
+            for (int i = 0; i < s.Length; i += 2)
+            {
+                WriteByte(Convert.ToByte(s.Substring(i, 2), 16));
+            }
+        }
+
         public int Length
         {
             get { return bytes.Count; }

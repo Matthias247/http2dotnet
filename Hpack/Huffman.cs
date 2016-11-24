@@ -85,7 +85,7 @@ namespace Hpack
         /// <summary>
         /// Returns the length of a string in huffman encoded form
         /// </summary>
-        public int EncodedLength(ArraySegment<byte> data)
+        public static int EncodedLength(ArraySegment<byte> data)
         {
             var byteCount = 0;
             var bitCount = 0;
@@ -115,7 +115,7 @@ namespace Hpack
         /// the specified offset.
         /// The required size can be calculated with Huffman.EncodedLength
         /// </summary>
-        public ArraySegment<byte> Encode(ArraySegment<byte> input, ArraySegment<byte> output)
+        public static ArraySegment<byte> Encode(ArraySegment<byte> input, ArraySegment<byte> output)
         {
             if (input.Count == 0) return input;
 

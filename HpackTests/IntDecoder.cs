@@ -20,17 +20,17 @@ namespace HpackTests
 
             var consumed = Decoder.Decode(5, new ArraySegment<byte>(buf.Bytes, 0, 3));
             Assert.True(Decoder.Done);
-            Assert.Equal(10u, Decoder.Result);
+            Assert.Equal(10, Decoder.Result);
             Assert.Equal(1, consumed);
 
             consumed = Decoder.Decode(5, new ArraySegment<byte>(buf.Bytes, 1, 2));
             Assert.True(Decoder.Done);
-            Assert.Equal(0u, Decoder.Result);
+            Assert.Equal(0, Decoder.Result);
             Assert.Equal(1, consumed);
 
             consumed = Decoder.Decode(5, new ArraySegment<byte>(buf.Bytes, 2, 1));
             Assert.True(Decoder.Done);
-            Assert.Equal(30u, Decoder.Result);
+            Assert.Equal(30, Decoder.Result);
             Assert.Equal(1, consumed);
 
             // Test with 1bit prefix (least)
@@ -41,17 +41,17 @@ namespace HpackTests
 
             consumed = Decoder.Decode(1, new ArraySegment<byte>(buf.Bytes, 0, 3));
             Assert.True(Decoder.Done);
-            Assert.Equal(0u, Decoder.Result);
+            Assert.Equal(0, Decoder.Result);
             Assert.Equal(1, consumed);
 
             consumed = Decoder.Decode(1, new ArraySegment<byte>(buf.Bytes, 1, 2));
             Assert.True(Decoder.Done);
-            Assert.Equal(0u, Decoder.Result);
+            Assert.Equal(0, Decoder.Result);
             Assert.Equal(1, consumed);
 
             consumed = Decoder.Decode(1, new ArraySegment<byte>(buf.Bytes, 2, 1));
             Assert.True(Decoder.Done);
-            Assert.Equal(0u, Decoder.Result);
+            Assert.Equal(0, Decoder.Result);
             Assert.Equal(1, consumed);
 
             // Test with 8bit prefix (largest)
@@ -64,27 +64,27 @@ namespace HpackTests
 
             consumed = Decoder.Decode(8, new ArraySegment<byte>(buf.Bytes, 0, 5));
             Assert.True(Decoder.Done);
-            Assert.Equal(0xFEu, Decoder.Result);
+            Assert.Equal(0xFE, Decoder.Result);
             Assert.Equal(1, consumed);
 
             consumed = Decoder.Decode(8, new ArraySegment<byte>(buf.Bytes, 1, 4));
             Assert.True(Decoder.Done);
-            Assert.Equal(0xEFu, Decoder.Result);
+            Assert.Equal(0xEF, Decoder.Result);
             Assert.Equal(1, consumed);
 
             consumed = Decoder.Decode(8, new ArraySegment<byte>(buf.Bytes, 2, 3));
             Assert.True(Decoder.Done);
-            Assert.Equal(0u, Decoder.Result);
+            Assert.Equal(0, Decoder.Result);
             Assert.Equal(1, consumed);
 
             consumed = Decoder.Decode(8, new ArraySegment<byte>(buf.Bytes, 3, 2));
             Assert.True(Decoder.Done);
-            Assert.Equal(1u, Decoder.Result);
+            Assert.Equal(1, Decoder.Result);
             Assert.Equal(1, consumed);
 
             consumed = Decoder.Decode(8, new ArraySegment<byte>(buf.Bytes, 4, 1));
             Assert.True(Decoder.Done);
-            Assert.Equal(42u, Decoder.Result);
+            Assert.Equal(42, Decoder.Result);
             Assert.Equal(1, consumed);
         }
 
@@ -99,7 +99,7 @@ namespace HpackTests
             buf.WriteByte(10);
             var consumed = Decoder.Decode(5, new ArraySegment<byte>(buf.Bytes, 0, 3));
             Assert.True(Decoder.Done);
-            Assert.Equal(1337u, Decoder.Result);
+            Assert.Equal(1337, Decoder.Result);
             Assert.Equal(3, consumed);
         }
 
@@ -120,7 +120,7 @@ namespace HpackTests
 
             consumed = Decoder.DecodeCont(buf2.View);
             Assert.True(Decoder.Done);
-            Assert.Equal(1337u, Decoder.Result);
+            Assert.Equal(1337, Decoder.Result);
             Assert.Equal(1, consumed);
 
             // And test with only prefix in first byte
@@ -136,7 +136,7 @@ namespace HpackTests
 
             consumed = Decoder.DecodeCont(buf2.View);
             Assert.True(Decoder.Done);
-            Assert.Equal(1337u, Decoder.Result);
+            Assert.Equal(1337, Decoder.Result);
             Assert.Equal(2, consumed);
 
             // Test with a single bit prefix
@@ -152,7 +152,7 @@ namespace HpackTests
 
             consumed = Decoder.DecodeCont(buf2.View);
             Assert.True(Decoder.Done);
-            Assert.Equal(0x811u, Decoder.Result);
+            Assert.Equal(0x811, Decoder.Result);
             Assert.Equal(2, consumed);
 
             // Test with 8bit prefix
@@ -168,7 +168,7 @@ namespace HpackTests
 
             consumed = Decoder.DecodeCont(buf2.View);
             Assert.True(Decoder.Done);
-            Assert.Equal(0x90Fu, Decoder.Result);
+            Assert.Equal(0x90F, Decoder.Result);
             Assert.Equal(1, consumed);
         }
 

@@ -12,7 +12,7 @@ namespace HpackTests
         [Fact]
         public void ShouldEncodeValuesWhichFitIntoThePrefix()
         {
-            uint val = 30; // Fits into 5bit prefix
+            int val = 30; // Fits into 5bit prefix
             var buf = IntEncoder.Encode(val, 0x80, 5);
             Assert.Equal(buf.Length, 1);
             Assert.Equal(buf[0], 0x80 | 0x1E);
@@ -36,7 +36,7 @@ namespace HpackTests
         [Fact]
         public void ShouldEncodeValuesIntoPrefixPlusExtraBytes()
         {
-            uint val = 30; // Fits not into 4bit prefix
+            int val = 30; // Fits not into 4bit prefix
             var buf = IntEncoder.Encode(val, 0xA0, 4);
             Assert.Equal(buf.Length, 2);
             Assert.Equal(buf[0], 0xA0 | 0x0F);
@@ -92,15 +92,15 @@ namespace HpackTests
         [Fact]
         public void ShouldEncodeTheMaximumAllowedValue()
         {
-            uint val = UInt32.MaxValue; // Fits not into 4bit prefix
+            int val = Int32.MaxValue; // Fits not into 4bit prefix
             var buf = IntEncoder.Encode(val, 0xA0, 2);
             Assert.Equal(buf.Length, 6);
-            Assert.Equal(buf[0], 0xA3); // Remaining: 4294967292
-            Assert.Equal(buf[1], 252); // Remaining: 33554431
-            Assert.Equal(buf[2], 255); // Remaining: 262143
-            Assert.Equal(buf[3], 255); // Remaining: 2047
-            Assert.Equal(buf[4], 255); // Remaining: 15
-            Assert.Equal(buf[5], 15); // Remaining: 15
+            Assert.Equal(buf[0], 0xA3); // Remaining: 2147483644
+            Assert.Equal(buf[1], 252); // Remaining: 16777215
+            Assert.Equal(buf[2], 255); // Remaining: 131071
+            Assert.Equal(buf[3], 255); // Remaining: 1023
+            Assert.Equal(buf[4], 255); // Remaining: 7
+            Assert.Equal(buf[5], 7);
 
             // TODO: Probably test this with other prefixes
         }

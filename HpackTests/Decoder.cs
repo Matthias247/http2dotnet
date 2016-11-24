@@ -118,14 +118,12 @@ namespace HpackTests
             var decoder = new Hpack.Decoder();
             var buf = new Buffer();
             buf.WriteByte(0x80); // Index 0 // TODO: Might be used for something different
-            var ex = Assert.Throws<Exception>(() => decoder.Decode(buf.View));
-            Assert.Equal("", ex.Message);
+            Assert.Throws<IndexOutOfRangeException>(() => decoder.Decode(buf.View));
 
             decoder = new Hpack.Decoder();
             buf = new Buffer();
             buf.WriteByte(0xC0); // 1100 0000 => Index 64 is outside of static table
-            ex = Assert.Throws<Exception>(() => decoder.Decode(buf.View));
-            Assert.Equal("", ex.Message);
+            Assert.Throws<IndexOutOfRangeException>(() => decoder.Decode(buf.View));
 
             // Put enough elements into the dynamic table to reach 64 in total
             decoder = new Hpack.Decoder();
@@ -144,8 +142,7 @@ namespace HpackTests
             // Increase index by 1 should lead to throw again
             buf = new Buffer();
             buf.WriteByte(0xC1); // 1100 0001 => Index 66 is outside of static and dynamic table
-            ex = Assert.Throws<Exception>(() => decoder.Decode(buf.View));
-            Assert.Equal("", ex.Message);
+            Assert.Throws<IndexOutOfRangeException>(() => decoder.Decode(buf.View));
         }
 
         [Fact]
@@ -184,12 +181,12 @@ namespace HpackTests
             Assert.Equal("de", decoder.HeaderField.Name);
             Assert.Equal("fgh", decoder.HeaderField.Value);
             Assert.False(decoder.HeaderField.Sensitive);
-            Assert.Equal(372, decoder.HeaderSize);
+            Assert.Equal(37, decoder.HeaderSize);
             Assert.Equal(8, consumed);
             Assert.Equal(1, decoder.DynamicTableLength);
             Assert.Equal(32+2+3, decoder.DynamicTableUsedSize);
 
-            var emptyView = new ArraySegment<byte>(null, 20, 20);
+            var emptyView = new ArraySegment<byte>(new byte[20], 20, 0);
 
             // Add a second entry to it, this time in chunks
             buf = new Buffer();
@@ -232,6 +229,7 @@ namespace HpackTests
             consumed = decoder.Decode(emptyView);
             Assert.False(decoder.Done);
             Assert.Equal(0, consumed);
+            buf = new Buffer();
             buf.WriteByte('2');
             consumed = decoder.Decode(buf.View);
             Assert.False(decoder.Done);
@@ -374,6 +372,25 @@ namespace HpackTests
         }
 
         [Fact]
+        public void ShouldHandleHeadersAfterATableSizeUpdateFrame()
+        {
+            var decoder = new Hpack.Decoder();
+
+            // Table update in single step
+            var buf = new Buffer();
+            buf.WriteByte(0x30); // Table update
+            buf.WriteByte(0x81); // Header frame
+            var consumed = decoder.Decode(buf.View);
+            Assert.True(decoder.Done);
+            Assert.Equal(":authority", decoder.HeaderField.Name);
+            Assert.Equal("", decoder.HeaderField.Value);
+            Assert.False(decoder.HeaderField.Sensitive);
+            Assert.Equal(42, decoder.HeaderSize);
+            Assert.Equal(2, consumed);
+            Assert.Equal(16, decoder.DynamicTableSize);
+        }
+
+        [Fact]
         public void ShouldThrowAnErrorIfTableSizeUpdateExceedsLimit()
         {
             var decoder = new Hpack.Decoder();
@@ -403,7 +420,7 @@ namespace HpackTests
         {
             var decoder = new Hpack.Decoder();
 
-            var emptyView = new ArraySegment<byte>(null, 20, 20);
+            var emptyView = new ArraySegment<byte>(new byte[20], 20, 0);
 
             var buf = new Buffer();
             buf.WriteByte(0x10);
@@ -461,7 +478,7 @@ namespace HpackTests
                 DynamicTableSizeLimit = 100000,
             });
 
-            var emptyView = new ArraySegment<byte>(null, 20, 20);
+            var emptyView = new ArraySegment<byte>(new byte[20], 20, 0);
 
             var dtable = GetDynamicTableOfDecoder(decoder);
             for (var i = 99; i >= 0; i--) {
@@ -545,7 +562,7 @@ namespace HpackTests
                 DynamicTableSizeLimit = 100000,
             });
 
-            var emptyView = new ArraySegment<byte>(null, 20, 20);
+            var emptyView = new ArraySegment<byte>(new byte[20], 20, 0);
             var dtable = GetDynamicTableOfDecoder(decoder);
             for (var i = 199; i >= 0; i--)
             {
@@ -594,9 +611,11 @@ namespace HpackTests
         public void ShouldHandleExampleC2_1OfTheSpecificationCorrectly()
         {
             var decoder = new Hpack.Decoder();
-            var buf = new Buffer(
-            '400a637573746f6d2d6b65790d637573' +
-            '746f6d2d686561646572', 'hex');
+            
+            var buf = new Buffer();
+            buf.AddHexString(
+                "400a637573746f6d2d6b65790d637573" +
+                "746f6d2d686561646572");
 
             var consumed = decoder.Decode(buf.View);
             Assert.True(decoder.Done);
@@ -611,8 +630,8 @@ namespace HpackTests
         public void ShouldHandleExampleC2_2OfTheSpecificationCorrectly()
         {
             var decoder = new Hpack.Decoder();
-            var buf = new Buffer(
-            '040c2f73616d706c652f70617468', 'hex');
+            var buf = new Buffer();
+            buf.AddHexString("040c2f73616d706c652f70617468");
 
             var consumed = decoder.Decode(buf.View);
             Assert.True(decoder.Done);
@@ -627,8 +646,8 @@ namespace HpackTests
         public void ShouldHandleExampleC2_3OfTheSpecificationCorrectly()
         {
             var decoder = new Hpack.Decoder();
-            var buf = new Buffer(
-            '100870617373776f726406736563726574', 'hex');
+            var buf = new Buffer();
+            buf.AddHexString("100870617373776f726406736563726574");
 
             var consumed = decoder.Decode(buf.View);
             Assert.True(decoder.Done);
@@ -643,8 +662,8 @@ namespace HpackTests
         public void ShouldHandleExampleC2_4OfTheSpecificationCorrectly()
         {
             var decoder = new Hpack.Decoder();
-            var buf = new Buffer(
-            '82', 'hex');
+            var buf = new Buffer();
+            buf.AddHexString("82");
 
             var consumed = decoder.Decode(buf.View);
             Assert.True(decoder.Done);
@@ -655,5 +674,293 @@ namespace HpackTests
             Assert.Equal(0, decoder.DynamicTableUsedSize);
         }
 
+        [Fact]
+        public void ShouldHandleExampleC3OfTheSpecificationCorrectly()
+        {
+            var decoder = new Hpack.Decoder();
+            // C.3.1
+            var buf = new Buffer();
+            buf.AddHexString("828684410f7777772e6578616d706c652e636f6d");
+
+            var results = DecodeAll(decoder, buf);
+            Assert.Equal(4, results.Count);
+            Assert.Equal(":method", results[0].Name);
+            Assert.Equal("GET", results[0].Value);
+            Assert.Equal(":scheme", results[1].Name);
+            Assert.Equal("http", results[1].Value);
+            Assert.Equal(":path", results[2].Name);
+            Assert.Equal("/", results[2].Value);
+            Assert.Equal(":authority", results[3].Name);
+            Assert.Equal("www.example.com", results[3].Value);
+            Assert.Equal(57, decoder.DynamicTableUsedSize);
+            Assert.Equal(1, decoder.DynamicTableLength);
+
+            // C.3.2
+            buf = new Buffer();
+            buf.AddHexString("828684be58086e6f2d6361636865");
+
+            results = DecodeAll(decoder, buf);
+            Assert.Equal(5, results.Count);
+            Assert.Equal(":method", results[0].Name);
+            Assert.Equal("GET", results[0].Value);
+            Assert.Equal(":scheme", results[1].Name);
+            Assert.Equal("http", results[1].Value);
+            Assert.Equal(":path", results[2].Name);
+            Assert.Equal("/", results[2].Value);
+            Assert.Equal(":authority", results[3].Name);
+            Assert.Equal("www.example.com", results[3].Value);
+            Assert.Equal("cache-control", results[4].Name);
+            Assert.Equal("no-cache", results[4].Value);
+            Assert.Equal(110, decoder.DynamicTableUsedSize);
+            Assert.Equal(2, decoder.DynamicTableLength);
+
+            // C.3.3
+            buf = new Buffer();
+            buf.AddHexString("828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565");
+
+            results = DecodeAll(decoder, buf);
+            Assert.Equal(5, results.Count);
+            Assert.Equal(":method", results[0].Name);
+            Assert.Equal("GET", results[0].Value);
+            Assert.Equal(":scheme", results[1].Name);
+            Assert.Equal("https", results[1].Value);
+            Assert.Equal(":path", results[2].Name);
+            Assert.Equal("/index.html", results[2].Value);
+            Assert.Equal(":authority", results[3].Name);
+            Assert.Equal("www.example.com", results[3].Value);
+            Assert.Equal("custom-key", results[4].Name);
+            Assert.Equal("custom-value", results[4].Value);
+            Assert.Equal(164, decoder.DynamicTableUsedSize);
+            Assert.Equal(3, decoder.DynamicTableLength);
+        }
+
+        [Fact]
+        public void ShouldHandleExampleC4OfTheSpecificationCorrectly()
+        {
+            var decoder = new Hpack.Decoder();
+            // C.4.1
+            var buf = new Buffer();
+            buf.AddHexString("828684418cf1e3c2e5f23a6ba0ab90f4ff");
+
+            var results = DecodeAll(decoder, buf);
+            Assert.Equal(4, results.Count);
+            Assert.Equal(":method", results[0].Name);
+            Assert.Equal("GET", results[0].Value);
+            Assert.Equal(":scheme", results[1].Name);
+            Assert.Equal("http", results[1].Value);
+            Assert.Equal(":path", results[2].Name);
+            Assert.Equal("/", results[2].Value);
+            Assert.Equal(":authority", results[3].Name);
+            Assert.Equal("www.example.com", results[3].Value);
+            Assert.Equal(57, decoder.DynamicTableUsedSize);
+            Assert.Equal(1, decoder.DynamicTableLength);
+
+            // C.4.2
+            buf = new Buffer();
+            buf.AddHexString("828684be5886a8eb10649cbf");
+
+            results = DecodeAll(decoder, buf);
+            Assert.Equal(5, results.Count);
+            Assert.Equal(":method", results[0].Name);
+            Assert.Equal("GET", results[0].Value);
+            Assert.Equal(":scheme", results[1].Name);
+            Assert.Equal("http", results[1].Value);
+            Assert.Equal(":path", results[2].Name);
+            Assert.Equal("/", results[2].Value);
+            Assert.Equal(":authority", results[3].Name);
+            Assert.Equal("www.example.com", results[3].Value);
+            Assert.Equal("cache-control", results[4].Name);
+            Assert.Equal("no-cache", results[4].Value);
+            Assert.Equal(110, decoder.DynamicTableUsedSize);
+            Assert.Equal(2, decoder.DynamicTableLength);
+
+            // C.4.3
+            buf = new Buffer();
+            buf.AddHexString("828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf");
+
+            results = DecodeAll(decoder, buf);
+            Assert.Equal(5, results.Count);
+            Assert.Equal(":method", results[0].Name);
+            Assert.Equal("GET", results[0].Value);
+            Assert.Equal(":scheme", results[1].Name);
+            Assert.Equal("https", results[1].Value);
+            Assert.Equal(":path", results[2].Name);
+            Assert.Equal("/index.html", results[2].Value);
+            Assert.Equal(":authority", results[3].Name);
+            Assert.Equal("www.example.com", results[3].Value);
+            Assert.Equal("custom-key", results[4].Name);
+            Assert.Equal("custom-value", results[4].Value);
+            Assert.Equal(164, decoder.DynamicTableUsedSize);
+            Assert.Equal(3, decoder.DynamicTableLength);
+        }
+
+        [Fact]
+        public void ShouldHandleExampleC5OfTheSpecificationCorrectly()
+        {
+            var decoder = new Hpack.Decoder(new Hpack.Decoder.Options {
+                DynamicTableSize = 256,
+                DynamicTableSizeLimit = 256,
+            });
+
+            // C.5.1
+            var buf = new Buffer();
+            buf.AddHexString(
+                "4803333032580770726976617465611d" +
+                "4d6f6e2c203231204f63742032303133" +
+                "2032303a31333a323120474d546e1768" +
+                "747470733a2f2f7777772e6578616d70" +
+                "6c652e636f6d");
+
+            var results = DecodeAll(decoder, buf);
+            Assert.Equal(4, results.Count);
+            Assert.Equal(":status", results[0].Name);
+            Assert.Equal("302", results[0].Value);
+            Assert.Equal("cache-control", results[1].Name);
+            Assert.Equal("private", results[1].Value);
+            Assert.Equal("date", results[2].Name);
+            Assert.Equal("Mon, 21 Oct 2013 20:13:21 GMT", results[2].Value);
+            Assert.Equal("location", results[3].Name);
+            Assert.Equal("https://www.example.com", results[3].Value);
+            Assert.Equal(222, decoder.DynamicTableUsedSize);
+            Assert.Equal(4, decoder.DynamicTableLength);
+
+            // C.5.2
+            buf = new Buffer();
+            buf.AddHexString("4803333037c1c0bf");
+
+            results = DecodeAll(decoder, buf);
+            Assert.Equal(4, results.Count);
+            Assert.Equal(":status", results[0].Name);
+            Assert.Equal("307", results[0].Value);
+            Assert.Equal("cache-control", results[1].Name);
+            Assert.Equal("private", results[1].Value);
+            Assert.Equal("date", results[2].Name);
+            Assert.Equal("Mon, 21 Oct 2013 20:13:21 GMT", results[2].Value);
+            Assert.Equal("location", results[3].Name);
+            Assert.Equal("https://www.example.com", results[3].Value);
+            Assert.Equal(222, decoder.DynamicTableUsedSize);
+            Assert.Equal(4, decoder.DynamicTableLength);
+
+            // C.5.3
+            buf = new Buffer();
+            buf.AddHexString(
+                "88c1611d4d6f6e2c203231204f637420" +
+                "323031332032303a31333a323220474d" +
+                "54c05a04677a69707738666f6f3d4153" +
+                "444a4b48514b425a584f5157454f5049" +
+                "5541585157454f49553b206d61782d61" +
+                "67653d333630303b2076657273696f6e" +
+                "3d31");
+
+            results = DecodeAll(decoder, buf);
+            Assert.Equal(6, results.Count);
+            Assert.Equal(":status", results[0].Name);
+            Assert.Equal("200", results[0].Value);
+            Assert.Equal("cache-control", results[1].Name);
+            Assert.Equal("private", results[1].Value);
+            Assert.Equal("date", results[2].Name);
+            Assert.Equal("Mon, 21 Oct 2013 20:13:22 GMT", results[2].Value);
+            Assert.Equal("location", results[3].Name);
+            Assert.Equal("https://www.example.com", results[3].Value);
+            Assert.Equal("content-encoding", results[4].Name);
+            Assert.Equal("gzip", results[4].Value);
+            Assert.Equal("set-cookie", results[5].Name);
+            Assert.Equal("foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1", results[5].Value);
+            Assert.Equal(215, decoder.DynamicTableUsedSize);
+            Assert.Equal(3, decoder.DynamicTableLength);
+        }
+
+        [Fact]
+        public void ShouldHandleExampleC6OfTheSpecificationCorrectly()
+        {
+            var decoder = new Hpack.Decoder(new Hpack.Decoder.Options {
+                DynamicTableSize = 256,
+                DynamicTableSizeLimit = 256,
+            });
+            // C.6.1
+            var buf = new Buffer();
+            buf.AddHexString(
+                "488264025885aec3771a4b6196d07abe" +
+                "941054d444a8200595040b8166e082a6" +
+                "2d1bff6e919d29ad171863c78f0b97c8" +
+                "e9ae82ae43d3");
+
+            var results = DecodeAll(decoder, buf);
+            Assert.Equal(4, results.Count);
+            Assert.Equal(":status", results[0].Name);
+            Assert.Equal("302", results[0].Value);
+            Assert.Equal("cache-control", results[1].Name);
+            Assert.Equal("private", results[1].Value);
+            Assert.Equal("date", results[2].Name);
+            Assert.Equal("Mon, 21 Oct 2013 20:13:21 GMT", results[2].Value);
+            Assert.Equal("location", results[3].Name);
+            Assert.Equal("https://www.example.com", results[3].Value);
+            Assert.Equal(222, decoder.DynamicTableUsedSize);
+            Assert.Equal(4, decoder.DynamicTableLength);
+
+            // C.6.2
+            buf = new Buffer();
+            buf.AddHexString("4883640effc1c0bf");
+
+            results = DecodeAll(decoder, buf);
+            Assert.Equal(4, results.Count);
+            Assert.Equal(":status", results[0].Name);
+            Assert.Equal("307", results[0].Value);
+            Assert.Equal("cache-control", results[1].Name);
+            Assert.Equal("private", results[1].Value);
+            Assert.Equal("date", results[2].Name);
+            Assert.Equal("Mon, 21 Oct 2013 20:13:21 GMT", results[2].Value);
+            Assert.Equal("location", results[3].Name);
+            Assert.Equal("https://www.example.com", results[3].Value);
+            Assert.Equal(222, decoder.DynamicTableUsedSize);
+            Assert.Equal(4, decoder.DynamicTableLength);
+
+            // C.6.3
+            buf = new Buffer();
+            buf.AddHexString(
+                "88c16196d07abe941054d444a8200595" +
+                "040b8166e084a62d1bffc05a839bd9ab" +
+                "77ad94e7821dd7f2e6c7b335dfdfcd5b" +
+                "3960d5af27087f3672c1ab270fb5291f" +
+                "9587316065c003ed4ee5b1063d5007");
+
+            results = DecodeAll(decoder, buf);
+            Assert.Equal(6, results.Count);
+            Assert.Equal(":status", results[0].Name);
+            Assert.Equal("200", results[0].Value);
+            Assert.Equal("cache-control", results[1].Name);
+            Assert.Equal("private", results[1].Value);
+            Assert.Equal("date", results[2].Name);
+            Assert.Equal("Mon, 21 Oct 2013 20:13:22 GMT", results[2].Value);
+            Assert.Equal("location", results[3].Name);
+            Assert.Equal("https://www.example.com", results[3].Value);
+            Assert.Equal("content-encoding", results[4].Name);
+            Assert.Equal("gzip", results[4].Value);
+            Assert.Equal("set-cookie", results[5].Name);
+            Assert.Equal("foo=ASDJKHQKBZXOQWEOPIUAXQWEOIU; max-age=3600; version=1", results[5].Value);
+            Assert.Equal(215, decoder.DynamicTableUsedSize);
+            Assert.Equal(3, decoder.DynamicTableLength);
+        }
+
+        static List<HeaderField> DecodeAll(Hpack.Decoder decoder, Buffer buf)
+        {
+            var results = new List<HeaderField>();
+            var total = buf.View;
+            var offset = total.Offset;
+            var count = total.Count;
+            while (true)
+            {
+                var segment = new ArraySegment<byte>(total.Array, offset, count);
+                var consumed = decoder.Decode(segment);
+                offset += consumed;
+                count -= consumed;
+                if (decoder.Done)
+                {
+                    results.Add(decoder.HeaderField);
+                }
+                else break;
+            }
+            return results;
+        }
     }
 }

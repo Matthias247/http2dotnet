@@ -13,14 +13,17 @@ namespace Hpack
         /// <param name="value">The value to encode</param>
         /// <param name="beforePrefix">The value that is stored in the same byte as the prefix</param>
         /// <param name="prefixBits">The number of bits that shall be used for the prefix</param>
-        public static byte[] Encode(uint value, byte beforePrefix, int prefixBits)
+        public static byte[] Encode(int value, byte beforePrefix, int prefixBits)
         {
+            if (value < 0) throw new ArgumentOutOfRangeException(nameof(value));
+            //uint val = (uint)value;
+
             var buf = new byte[8]; // Will never need more than this for 32bit numbers
             var offset = 0;
             // TODO: Buffer pooling
 
             // Calculate the maximum value that fits into the prefix
-            uint maxPrefixVal = (uint)((1 << prefixBits) - 1); // equals 2^N - 1
+            int maxPrefixVal = ((1 << prefixBits) - 1); // equals 2^N - 1
             if (value < maxPrefixVal) {
                 // Value fits into the prefix
                 buf[offset] = (byte)((beforePrefix | value) & 0xFF);

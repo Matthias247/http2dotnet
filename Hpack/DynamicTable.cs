@@ -122,5 +122,44 @@ namespace Hpack
             this._usedSize += entrySize;
             return true;
         }
+
+        /// <summary>
+        /// Returns the index of the best matching element in the dynamic table.
+        /// The index will be 0-based, means it is relative to the start of the
+        /// dynamic table.
+        /// If no index was found the return value is -1.
+        /// If an index was found and the name as well as the value match
+        /// isFullMatch will be set to true.
+        /// </summary>
+        public int GetBestMatchingIndex(HeaderField field, out bool isFullMatch)
+        {
+            var bestMatch = -1;
+            isFullMatch = false;
+
+            var i = 0;
+            foreach (var entry in _entries)
+            {
+                if (entry.Name == field.Name)
+                {
+                    if (bestMatch == -1)
+                    {
+                        // We used the lowest matching field index, which makes
+                        // search for the receiver the most efficient and provides
+                        // the highest chance to use the Static Table.
+                        bestMatch = i;
+                    }
+
+                    if (entry.Value == field.Value)
+                    {
+                        // It's a perfect match!
+                        isFullMatch = true;
+                        return i;
+                    }
+                }
+                i++;
+            }
+
+            return bestMatch;
+        }
     }
 }

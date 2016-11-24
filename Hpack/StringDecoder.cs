@@ -72,8 +72,8 @@ namespace Hpack
                 var len = this._lengthDecoder.Result;
                 if (len > this._maxLength)
                     throw new Exception("Maximum string length exceeded");
-                this._octetLength = (int)len;
-                this._stringBuffer = _pool.Rent((int)this._octetLength);
+                this._octetLength = len;
+                this._stringBuffer = _pool.Rent(this._octetLength);
                 this._bufferOffset = 0;
                 this._state = State.DecodeData;
                 consumed += this.DecodeCont(new ArraySegment<byte>(buf.Array, offset, length));
@@ -101,8 +101,8 @@ namespace Hpack
                 var len = this._lengthDecoder.Result;
                 if (len > this._maxLength)
                     throw new Exception("Maximum string length exceeded");
-                this._octetLength = (int)len;
-                this._stringBuffer = _pool.Rent((int)this._octetLength);
+                this._octetLength = len;
+                this._stringBuffer = _pool.Rent(this._octetLength);
                 this._bufferOffset = 0;
                 this._state = State.DecodeData;
             }
@@ -151,7 +151,10 @@ namespace Hpack
                 }
                 // TODO: Optionally check here for valid HTTP/2 header names
                 this.Done = true;
-                this.StringLength = this._octetLength;
+                // The string length for the table is used without huffman encoding
+                // TODO: This might by a different result than Encoding.ASCII.GetByteCount
+                // Might be required to streamline that
+                this.StringLength = this.Result.Length;
                 this._state = State.StartDecode;
 
                 _pool.Return(this._stringBuffer);

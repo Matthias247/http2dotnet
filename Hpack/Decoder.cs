@@ -47,7 +47,7 @@ namespace Hpack
         private struct Task
         {
             public TaskType Type;
-            public uint IntData;
+            public int IntData;
             public string StringData;
         }
 
@@ -180,7 +180,7 @@ namespace Hpack
             // The index is stored as result of the first task
             var idx = this._tasks[0].IntData;
             this.Reset();
-            var tableHeader = this._headerTable.GetAt((int)idx);
+            var tableHeader = this._headerTable.GetAt(idx);
             // No need to check for validity here
             // The getAt function will already throw if the index is not valid
 
@@ -200,7 +200,7 @@ namespace Hpack
         private void HandleDecodeNameIndexed()
         {
             var idx = this._tasks[0].IntData;
-            var tableHeader = this._headerTable.GetAt((int)idx); // Can throw
+            var tableHeader = this._headerTable.GetAt(idx); // Can throw
             var val = this._tasks[1].StringData;
             var valLen = this._tasks[1].IntData;
             var sensitive = this._sensitive;
@@ -208,7 +208,7 @@ namespace Hpack
             if (this._addToTable)
             {
                 // The received entry should be added to the dynamic table
-                this._headerTable.Insert(tableHeader.Name, tableHeader.NameLen, val, (int)valLen);
+                this._headerTable.Insert(tableHeader.Name, tableHeader.NameLen, val, valLen);
             }
 
             this.Reset(); // Reset decoder state
@@ -220,7 +220,7 @@ namespace Hpack
                 Value = val,
                 Sensitive = sensitive,
             };
-            HeaderSize = (int)(32 + tableHeader.NameLen + valLen);
+            HeaderSize = 32 + tableHeader.NameLen + valLen;
         }
 
         /// <summary>
@@ -237,7 +237,7 @@ namespace Hpack
             if (this._addToTable)
             {
                 // The received entry should be added to the dynamic table
-                this._headerTable.Insert(key, (int)keyLen, val, (int)valLen);
+                this._headerTable.Insert(key, keyLen, val, valLen);
             }
 
             this.Reset(); // Reset decoder state
@@ -249,7 +249,7 @@ namespace Hpack
                 Value = val,
                 Sensitive = sensitive,
             };
-            HeaderSize = (int)(32 + keyLen + valLen);
+            HeaderSize = 32 + keyLen + valLen;
         }
 
         private void HandleTableUpdate()
@@ -262,7 +262,7 @@ namespace Hpack
             {
                 throw new Exception("table size limit exceeded");
             }
-            this._headerTable.MaxDynamicTableSize = (int)newLen;
+            this._headerTable.MaxDynamicTableSize = newLen;
         }
 
         /// <summary>
@@ -278,21 +278,22 @@ namespace Hpack
             // Loop as long as we have data available
             for (;;)
             {
+                var segment = new ArraySegment<byte>(input.Array, offset, count);
                 if (this._curTask == -1)
                 {
                     // Start of a packet
                     this.Done = false; // Reset the done flag
+                    if (count < 1) break;
                     // Read the first byte to determine what to do
                     // This will setup the task structures that control decoding
                     // of the data
-                    var consumed = HandleStartOfPacket(input);
+                    var consumed = HandleStartOfPacket(segment);
                     offset += consumed;
                     count -= consumed;
                 }
                 else
                 {
                     // There are tasks pending
-                    var segment = new ArraySegment<byte>(input.Array, offset, count);
                     bool executeMoreTasks;
                     var consumed = ExecutePendingTask(segment, out executeMoreTasks);
                     offset += consumed;
@@ -309,16 +310,11 @@ namespace Hpack
 
         /// <summary>
         /// Reads the start of an HPACK packet and sets up further instructions
+        /// for decoding the remaining bytes
         /// </summary>
         /// <returns>The number of processed bytes</returns>
         private int HandleStartOfPacket(ArraySegment<byte> buf)
         {
-            // Start of a packet
-            // Read the first byte to determine what to do
-            // This will setup the task structures that control decoding
-            // of the data
-            if (buf.Count < 1) return 0;
-
             var startByte = buf.Array[buf.Offset];
             // Go the the next task in the next iteration
             this._curTask = 0;
@@ -432,7 +428,7 @@ namespace Hpack
             {
                 // Check if we have at least 1 byte available
                 if (count < 1) return 0;
-                var consumed = this._intDecoder.Decode((int)currentTask.IntData, buf);
+                var consumed = this._intDecoder.Decode(currentTask.IntData, buf);
                 offset += consumed;
                 count -= consumed;
                 if (this._intDecoder.Done)
@@ -479,7 +475,7 @@ namespace Hpack
                 if (this._stringDecoder.Done)
                 {
                     // Store the decoding result
-                    this._tasks[this._curTask].IntData = (uint)this._stringDecoder.StringLength;
+                    this._tasks[this._curTask].IntData = this._stringDecoder.StringLength;
                     this._tasks[this._curTask].StringData = this._stringDecoder.Result;
                     // And advance
                     this._curTask++;
@@ -500,7 +496,7 @@ namespace Hpack
                 if (this._stringDecoder.Done)
                 {
                     // Store the decoding result
-                    this._tasks[this._curTask].IntData = (uint)this._stringDecoder.StringLength;
+                    this._tasks[this._curTask].IntData = this._stringDecoder.StringLength;
                     this._tasks[this._curTask].StringData = this._stringDecoder.Result;
                     // And advance
                     this._curTask++;
@@ -534,7 +530,7 @@ namespace Hpack
                 throw new Exception("invalid task");
             }
 
-            return buf.Offset - offset;
+            return offset - buf.Offset;
         }
     }
 }

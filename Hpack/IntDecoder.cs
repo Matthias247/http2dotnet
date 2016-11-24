@@ -8,7 +8,7 @@ namespace Hpack
     public class IntDecoder
     {
         /// <summary>The result of the decode operation</summary>
-        public uint Result;
+        public int Result;
 
         /// <summary>
         /// Whether decoding was completed.
@@ -42,7 +42,7 @@ namespace Hpack
             length--;
             var consumed = 1;
 
-            var prefixMask = (1u << (prefixLen)) - 1;
+            var prefixMask = (1 << (prefixLen)) - 1;
             this.Result = bt & prefixMask;
             if (prefixMask == this.Result)
             {
@@ -79,12 +79,12 @@ namespace Hpack
                 // Thereby check for overflows
                 var add = (bt & 127) * (1u << _acc);
                 var n = add + this.Result;
-                if (n > UInt32.MaxValue)
+                if (n > Int32.MaxValue)
                 {
                     throw new Exception("invalid integer");
                 }
 
-                this.Result = (uint)n;
+                this.Result = (int)n;
                 this._acc += 7;
 
                 if ((bt & 0x80) == 0)

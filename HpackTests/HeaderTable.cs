@@ -56,15 +56,15 @@ namespace HpackTests
         public void ShouldReturnItemsFromDynamicTable()
         {
             var t = new HeaderTable(400);
-            t.Insert("a", 1, "b", 1);
-            t.Insert("c", 1, "d", 1);
+            t.Insert("a", 1, "b", 2);
+            t.Insert("c", 3, "d", 4);
             var item = t.GetAt(62);
             Assert.Equal(
-                new TableEntry { Name = "c", NameLen = 1, Value = "d", ValueLen = 1},
+                new TableEntry { Name = "c", NameLen = 3, Value = "d", ValueLen = 4},
                 item, ec);
             item = t.GetAt(63);
             Assert.Equal(
-                new TableEntry { Name = "a", NameLen = 1, Value = "b", ValueLen = 1},
+                new TableEntry { Name = "a", NameLen = 1, Value = "b", ValueLen = 2},
                 item, ec);
         }
 

@@ -50,20 +50,20 @@ namespace Http2
         /// A 31-bit stream identifier for the stream that this stream depends on.
         /// This field is only present if the PRIORITY flag is set
         /// </summary>
-        int StreamDependency;
+        public int StreamDependency;
 
         /// <summary>
         /// A single-bit flag indicating that the stream dependency is exclusive.
         /// This field is only present if the PRIORITY flag is set
         /// </summary>
-        bool StreamDependencyIsExclusive;
+        public bool StreamDependencyIsExclusive;
 
         /// <summary>
         /// An unsigned 8-bit integer representing a priority weight for the stream.
         /// Add one to the value to obtain a weight between 1 and 256.
         /// This field is only present if the PRIORITY flag is set.
         /// </summary>
-        byte Weight;
+        public byte Weight;
     }
 
     /// <summary>
