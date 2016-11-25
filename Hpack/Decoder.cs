@@ -89,22 +89,13 @@ namespace Hpack
         private bool _sensitive = false;
 
         /// <summary> Returns the current maximum size of the dynamic table</summary>
-        public int DynamicTableSize
-        {
-           get { return this._headerTable.MaxDynamicTableSize; }
-        }
+        public int DynamicTableSize => this._headerTable.MaxDynamicTableSize;
 
         /// <summary> Gets the actual used size for the dynamic table</summary>
-        public int DynamicTableUsedSize
-        {
-           get { return this._headerTable.UsedDynamicTableSize; }
-        }
+        public int DynamicTableUsedSize => this._headerTable.UsedDynamicTableSize;
 
         /// <summary> Gets the number of elements in the dynamic table</summary>
-        public int DynamicTableLength
-        {
-           get { return this._headerTable.DynamicTableLength; }
-        }
+        public int DynamicTableLength => this._headerTable.DynamicTableLength;
 
         /// <summary> Returns the limit for the dynamic table size</summary>
         public int DynamicTableSizeLimit

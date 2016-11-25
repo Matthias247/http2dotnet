@@ -12,7 +12,7 @@ namespace HpackTests
         public void ShouldEncodeStringsWithoutHuffmanEncoding()
         {
             var testStr = "Hello World";
-            var bytes = StringEncoder.Encode(testStr, false);
+            var bytes = StringEncoder.Encode(testStr, HuffmanStrategy.Never);
             Assert.Equal(12, bytes.Length);
 
             // Compare the bytes
@@ -33,7 +33,7 @@ namespace HpackTests
             {
                 testStr += "b";
             }
-            bytes = StringEncoder.Encode(testStr, false);
+            bytes = StringEncoder.Encode(testStr, HuffmanStrategy.Never);
             Assert.Equal(130, bytes.Length);
 
             // Compare the bytes
@@ -53,7 +53,7 @@ namespace HpackTests
             // 1100011 00101 101000 101000 00111
             // 11000110 01011010 00101000 00111
             // var expectedResult = 0xC65A283F;
-            var bytes = StringEncoder.Encode(testStr, true);
+            var bytes = StringEncoder.Encode(testStr, HuffmanStrategy.Always);
             Assert.Equal(5, bytes.Length);
 
             // Compare the bytes
@@ -71,7 +71,7 @@ namespace HpackTests
                 testStr += "Z"; // fd  [ 8]
             }
 
-            bytes = StringEncoder.Encode(testStr, true);
+            bytes = StringEncoder.Encode(testStr, HuffmanStrategy.Always);
             Assert.Equal(3+4*64, bytes.Length);
 
             // Compare the bytes
@@ -85,6 +85,35 @@ namespace HpackTests
                 Assert.Equal(0xEA, bytes[i+2]);
                 Assert.Equal(0xFD, bytes[i+3]);
             }
+        }
+
+        [Fact]
+        public void ShouldApplyHuffmanEncodingIfStringGetsSmaller()
+        {
+            var testStr = "test"; // 01001 00101 01000 01001 => 01001001 01010000 1001
+            
+            var bytes = StringEncoder.Encode(testStr, HuffmanStrategy.IfSmaller);
+            Assert.Equal(4, bytes.Length);
+
+            // Compare the bytes
+            Assert.Equal(0x83, bytes[0]);
+            Assert.Equal(0x49, bytes[1]);
+            Assert.Equal(0x50, bytes[2]);
+            Assert.Equal(0x9F, bytes[3]);
+        }
+
+        [Fact]
+        public void ShouldNotApplyHuffmanEncodingIfStringDoesNotGetSmaller()
+        {
+            var testStr = "XZ"; // 11111100 11111101
+            
+            var bytes = StringEncoder.Encode(testStr, HuffmanStrategy.IfSmaller);
+            Assert.Equal(3, bytes.Length);
+
+            // Compare the bytes
+            Assert.Equal(0x02, bytes[0]);
+            Assert.Equal((byte)'X', bytes[1]);
+            Assert.Equal((byte)'Z', bytes[2]);
         }
     }
 }

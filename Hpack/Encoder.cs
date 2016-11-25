@@ -21,9 +21,10 @@ namespace Hpack
 
             /// <summary>
             /// Whether to apply huffman encoding.
-            /// This is true by default
+            /// By default huffman encoding will be applied when the output gets
+            /// smaller through it.
             /// </summary>
-            public bool? UseHuffman;
+            public HuffmanStrategy? HuffmanStrategy;
         }
 
         /// <summary>
@@ -39,7 +40,7 @@ namespace Hpack
         }
 
         HeaderTable _headerTable;
-        bool _useHuffman;
+        HuffmanStrategy _huffmanStrategy;
 
         /// <summary>
         /// The current maximum size of the dynamic table.!--
@@ -80,7 +81,7 @@ namespace Hpack
         public Encoder(Options? options)
         {
             var dynamicTableSize = Defaults.DynamicTableSize;
-            this._useHuffman = true;
+            this._huffmanStrategy = HuffmanStrategy.IfSmaller;
 
             if (options.HasValue)
             {
@@ -89,9 +90,9 @@ namespace Hpack
                 {
                     dynamicTableSize = opts.DynamicTableSize.Value;
                 }
-                if (opts.UseHuffman.HasValue)
+                if (opts.HuffmanStrategy.HasValue)
                 {
-                    this._useHuffman = opts.UseHuffman.Value;
+                    this._huffmanStrategy = opts.HuffmanStrategy.Value;
                 }
             }
 
@@ -176,7 +177,7 @@ namespace Hpack
                         else
                         {
                             // Write 0x40 and name
-                            var str = StringEncoder.Encode(header.Name, this._useHuffman);
+                            var str = StringEncoder.Encode(header.Name, this._huffmanStrategy);
                             nameBytes = new byte[1+str.Length];
                             nameBytes[0] = 0x40;
                             Array.Copy(str, 0, nameBytes, 1, str.Length);
@@ -194,7 +195,7 @@ namespace Hpack
                         else
                         {
                             // Write 0x00 and name
-                            var str = StringEncoder.Encode(header.Name, this._useHuffman);
+                            var str = StringEncoder.Encode(header.Name, this._huffmanStrategy);
                             nameBytes = new byte[1+str.Length];
                             nameBytes[0] = 0x00;
                             Array.Copy(str, 0, nameBytes, 1, str.Length);
@@ -210,7 +211,7 @@ namespace Hpack
                         else
                         {
                             // Write 0x10 and name
-                            var str = StringEncoder.Encode(header.Name, this._useHuffman);
+                            var str = StringEncoder.Encode(header.Name, this._huffmanStrategy);
                             nameBytes = new byte[1+str.Length];
                             nameBytes[0] = 0x10;
                             Array.Copy(str, 0, nameBytes, 1, str.Length);
@@ -218,7 +219,7 @@ namespace Hpack
                     }
 
                     // Write the value string
-                    var valueBytes = StringEncoder.Encode(header.Value, this._useHuffman);
+                    var valueBytes = StringEncoder.Encode(header.Value, this._huffmanStrategy);
                     // Merge everything into fieldBytes
                     fieldBytes = new byte[nameBytes.Length + valueBytes.Length];
                     Array.Copy(nameBytes, 0, fieldBytes, 0, nameBytes.Length);

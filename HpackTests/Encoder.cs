@@ -39,7 +39,7 @@ namespace HpackTests
         public void ShouldHandleExampleC2_1OfTheSpecificationCorrectly()
         {
             var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
-                UseHuffman = false,
+                HuffmanStrategy = HuffmanStrategy.Never,
             });
             var fields = new HeaderField[] {
                 new HeaderField{ Name = "custom-key", Value = "custom-header", Sensitive = false }
@@ -61,7 +61,7 @@ namespace HpackTests
         public void ShouldHandleExampleC2_2OfTheSpecificationCorrectly()
         {
             var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
-                UseHuffman = false,
+                HuffmanStrategy = HuffmanStrategy.Never,
             });
             // Decrease table size to avoid using indexing
             encoder.DynamicTableSize = 0;
@@ -84,7 +84,7 @@ namespace HpackTests
         public void ShouldHandleExampleC2_3OfTheSpecificationCorrectly()
         {
             var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
-                UseHuffman = false,
+                HuffmanStrategy = HuffmanStrategy.Never,
             });
             var fields = new HeaderField[] {
                 new HeaderField{ Name = "password", Value = "secret", Sensitive = true }
@@ -104,7 +104,7 @@ namespace HpackTests
         public void ShouldHandleExampleC2_4OfTheSpecificationCorrectly()
         {
             var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
-                UseHuffman = false,
+                HuffmanStrategy = HuffmanStrategy.Never,
             });
             var fields = new HeaderField[] {
                 new HeaderField{ Name = ":method", Value = "GET", Sensitive = false }
@@ -124,7 +124,7 @@ namespace HpackTests
         public void ShouldHandleExampleC3OfTheSpecificationCorrectly()
         {
             var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
-                UseHuffman = false,
+                HuffmanStrategy = HuffmanStrategy.Never,
             });
             var fields = new HeaderField[] {
                 new HeaderField{ Name = ":method", Value ="GET", Sensitive = false },
@@ -182,7 +182,7 @@ namespace HpackTests
         public void ShouldHandleExampleC4OfTheSpecificationCorrectly()
         {
             var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
-                UseHuffman = true,
+                HuffmanStrategy = HuffmanStrategy.Always,
             });
             var fields = new HeaderField[] {
                 new HeaderField{ Name = ":method", Value ="GET", Sensitive = false },
@@ -240,7 +240,7 @@ namespace HpackTests
         public void ShouldHandleExampleC5OfTheSpecificationCorrectly()
         {
             var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
-                UseHuffman = false,
+                HuffmanStrategy = HuffmanStrategy.Never,
                 DynamicTableSize = 256,
             });
             var fields = new HeaderField[] {
@@ -311,7 +311,7 @@ namespace HpackTests
         public void ShouldHandleExampleC6OfTheSpecificationCorrectly()
         {
             var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
-                UseHuffman = true,
+                HuffmanStrategy = HuffmanStrategy.Always,
                 DynamicTableSize = 256,
             });
 

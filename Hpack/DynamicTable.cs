@@ -39,18 +39,12 @@ namespace Hpack
         }
 
         /// <summary>The size that is currently occupied by the table</summary>
-        public int UsedSize
-        {
-            get { return this._usedSize; }
-        }
+        public int UsedSize => this._usedSize;
 
         /// <summary>
         /// Get the current length of the dynamic table
         /// </summary>
-        public int Length
-        {
-            get { return this._entries.Count; }
-        }
+        public int Length => this._entries.Count;
 
         public TableEntry GetAt(int index)
         {

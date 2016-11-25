@@ -22,16 +22,10 @@ namespace Hpack
         }
 
         /// <summary>Gets the occupied size in bytes for the dynamic table</summary>
-        public int UsedDynamicTableSize
-        {
-            get { return this.dynamic.UsedSize; }
-        }
+        public int UsedDynamicTableSize => this.dynamic.UsedSize;
 
         /// <summary>Gets the current length of the dynamic table</summary>
-        public int DynamicTableLength
-        {
-            get { return this.dynamic.Length; }
-        }
+        public int DynamicTableLength => this.dynamic.Length;
 
         /// <summary>
         /// Inserts a new element into the header table
