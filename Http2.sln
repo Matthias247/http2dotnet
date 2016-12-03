@@ -1,13 +1,15 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
-VisualStudioVersion = 15.0.25914.0
+VisualStudioVersion = 15.0.25920.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Hpack", "Hpack\Hpack.csproj", "{F86F63E7-55B2-4776-BF1F-F8AFFDCF3355}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HpackTests", "HpackTests\HpackTests.csproj", "{AB4E7AD2-5778-485D-BE8D-9A7268C35B2E}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Http2", "Http2\Http2.csproj", "{6B80E5BC-D4AA-4C15-BE02-63270F042157}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Http2Tests", "Http2Tests\Http2Tests.csproj", "{71378047-112F-4CA9-816E-C629C6C12D5D}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -27,6 +29,10 @@ Global
 		{6B80E5BC-D4AA-4C15-BE02-63270F042157}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6B80E5BC-D4AA-4C15-BE02-63270F042157}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{6B80E5BC-D4AA-4C15-BE02-63270F042157}.Release|Any CPU.Build.0 = Release|Any CPU
+		{71378047-112F-4CA9-816E-C629C6C12D5D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{71378047-112F-4CA9-816E-C629C6C12D5D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{71378047-112F-4CA9-816E-C629C6C12D5D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{71378047-112F-4CA9-816E-C629C6C12D5D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
