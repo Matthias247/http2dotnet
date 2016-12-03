@@ -38,19 +38,7 @@ namespace Http2
         public static async ValueTask<bool> ReadAsync(IStreamReader stream)
         {
             var buffer = new byte[Length];
-            var offset = 0;
-            var length = buffer.Length;
-
-            while (length != 0)
-            {
-                var res = await stream.ReadAsync(new ArraySegment<byte>(buffer, offset, length));
-                if (res.EndOfStream)
-                {
-                    throw new Exception("Reached the end of stream");
-                }
-                offset += res.BytesRead;
-                length -= res.BytesRead;
-            }
+            await stream.ReadAll(new ArraySegment<byte>(buffer));
 
             // Compare with the expected preface
             for (var i = 0; i < buffer.Length; i++)
@@ -60,7 +48,7 @@ namespace Http2
                     throw new Exception("Invalid prefix received");
                 }
             }
-            
+
             return true;
         }
     }

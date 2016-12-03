@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 using System.Text;
 
@@ -43,8 +44,7 @@ namespace Http2Tests
             var buffer = new BufferReadStream(50);
             Array.Copy(ClientPreface.Bytes, buffer.Buffer, ClientPreface.Length);
             buffer.Written = ClientPreface.Length - 1; // Miss one byte
-            var ex = await Assert.ThrowsAsync<Exception>(() => ClientPreface.ReadAsync(buffer).AsTask());
-            Assert.Equal("Reached the end of stream", ex.Message);
+            await Assert.ThrowsAsync<EndOfStreamException>(() => ClientPreface.ReadAsync(buffer).AsTask());
         }
 
         [Fact]
