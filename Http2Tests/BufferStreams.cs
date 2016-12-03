@@ -12,10 +12,13 @@ namespace Http2Tests
         public byte[] Buffer;
         public int Written = 0;
         public int ReadOffset = 0;
+        public int NrReads = 0;
+        private int maxRead;
 
-        public BufferReadStream(int bufferSize)
+        public BufferReadStream(int bufferSize, int maxRead)
         {
             Buffer = new byte[bufferSize];
+            this.maxRead = maxRead;
         }
 
         async ValueTask<StreamReadResult> IStreamReader.ReadAsync(ArraySegment<byte> buffer)
@@ -23,6 +26,7 @@ namespace Http2Tests
             return await Task.Run(() =>
             {
                 var available = Written - ReadOffset;
+                NrReads++;
                 if (available == 0)
                 {
                     return new StreamReadResult
@@ -33,6 +37,7 @@ namespace Http2Tests
                 }
 
                 var toCopy = Math.Min(buffer.Count, available);
+                toCopy = Math.Min(toCopy, maxRead);
                 Array.Copy(Buffer, ReadOffset, buffer.Array, buffer.Offset, toCopy);
                 ReadOffset += toCopy;
 

@@ -32,7 +32,7 @@ namespace Http2Tests
         [Fact]
         public async Task ShouldReadThePrefaceFromStream()
         {
-            var buffer = new BufferReadStream(50);
+            var buffer = new BufferReadStream(50, 50);
             Array.Copy(ClientPreface.Bytes, buffer.Buffer, ClientPreface.Length);
             buffer.Written = ClientPreface.Length;
             await ClientPreface.ReadAsync(buffer);
@@ -41,7 +41,7 @@ namespace Http2Tests
         [Fact]
         public async Task ShouldErrorIfStreamEnds()
         {
-            var buffer = new BufferReadStream(50);
+            var buffer = new BufferReadStream(50, 50);
             Array.Copy(ClientPreface.Bytes, buffer.Buffer, ClientPreface.Length);
             buffer.Written = ClientPreface.Length - 1; // Miss one byte
             await Assert.ThrowsAsync<EndOfStreamException>(() => ClientPreface.ReadAsync(buffer).AsTask());
@@ -50,7 +50,7 @@ namespace Http2Tests
         [Fact]
         public async Task ShouldErrorIfStreamDoesNotContainPreface()
         {
-            var buffer = new BufferReadStream(50);
+            var buffer = new BufferReadStream(50, 50);
             Array.Copy(ClientPreface.Bytes, buffer.Buffer, ClientPreface.Length);
             ClientPreface.Bytes[22] = (byte)'l';
             buffer.Written = ClientPreface.Length;
