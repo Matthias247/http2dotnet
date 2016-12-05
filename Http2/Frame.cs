@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace Http2
 {
@@ -39,6 +40,61 @@ namespace Http2
         /// An 8-bit field reserved for boolean flags specific to the frame type
         /// </summary>
         public byte Flags;
+
+        /// <summary>The length of frame headers in bytes</summary>
+        public const int HeaderSize = 9;
+
+        /// <summary>
+        /// Decodes a frame header from the given byte array
+        /// This must be at least 9 bytes long
+        /// </summary>
+        public static FrameHeader DecodeFrom(ArraySegment<byte> bytes)
+        {
+            var b = bytes.Array;
+            var o = bytes.Offset;
+            var length = (b[o+0] << 16) | (b[o+1] << 8) | (b[o+2] & 0xFF);
+            var type = (FrameType)b[o+3];
+            var flags = b[o+4];
+            var streamId = ((b[o+5] & 0x7F) << 24) | (b[o+6] << 16) | (b[o+7] << 8) | b[o+8];
+            return new FrameHeader
+            {
+                Type = type,
+                Length = length,
+                Flags = flags,
+                StreamId = (uint)streamId,
+            };
+        }
+
+        /// <summary>
+        /// Encodes a frame header to the given byte array
+        /// This must be at least 9 bytes long
+        /// </summary>
+        public void EncodeInto(ArraySegment<byte> bytes)
+        {
+            var b = bytes.Array;
+            var o = bytes.Offset;
+            
+            var length = (b[o+0] << 16) | (b[o+1] << 8) | (b[o+2] & 0xFF);
+            b[o+0] = (byte)((Length >> 16) & 0xFF);
+            b[o+1] = (byte)((Length >> 8) & 0xFF);
+            b[o+2] = (byte)((Length) & 0xFF);
+            b[o+3] = (byte)Type;
+            b[o+4] = Flags;
+            b[o+5] = (byte)((StreamId >> 24) & 0xFF);
+            b[o+6] = (byte)((StreamId >> 16) & 0xFF);
+            b[o+7] = (byte)((StreamId >> 8) & 0xFF);
+            b[o+8] = (byte)((StreamId) & 0xFF);
+        }
+
+        /// <summary>
+        /// Reads a frame header from the given stream
+        /// </summary>
+        public static async ValueTask<FrameHeader> ReceiveAsync(
+            IStreamReader stream, byte[] headerSpace)
+        {
+            await stream.ReadAll(new ArraySegment<byte>(headerSpace, 0, HeaderSize));
+            return DecodeFrom(new ArraySegment<byte>(headerSpace, 0, HeaderSize));
+        }
     }
 
     /// <summary>
@@ -69,6 +125,7 @@ namespace Http2
     /// <summary>
     /// Valid flags for DATA frames
     /// </summary>
+    [Flags]
     public enum DataFrameFlags : byte
     {
         /// <summary>
@@ -89,6 +146,7 @@ namespace Http2
     /// <summary>
     /// Valid flags for HEADERS frames
     /// </summary>
+    [Flags]
     public enum HeadersFrameFlags : byte
     {
         /// <summary>
@@ -123,6 +181,7 @@ namespace Http2
     /// <summary>
     /// Valid flags for HEADERS frames
     /// </summary>
+    [Flags]
     public enum SettingsFrameFlags : byte
     {
         /// <summary>
@@ -139,6 +198,7 @@ namespace Http2
     /// <summary>
     /// Valid flags for PUSH_PROMISE frames
     /// </summary>
+    [Flags]
     public enum PushPromiseFrameFlags : byte
     {
         /// <summary>
@@ -163,6 +223,7 @@ namespace Http2
     /// <summary>
     /// Valid flags for PING frames
     /// </summary>
+    [Flags]
     public enum PingFrameFlags : byte
     {
         /// <summary>
@@ -176,12 +237,46 @@ namespace Http2
     /// <summary>
     /// Valid flags for CONTINUATION frames
     /// </summary>
+    [Flags]
     public enum ContinuationFrameFlags : byte
     {
         /// <summary>
         /// When set, bit 2 indicates that this frame ends a header block
         /// </summary>
         EndOfHeaders = 0x4,
+    }
+
+    /// <summary>
+    /// Stores the mapping from frame type to valid flags
+    /// </summary>
+    public static class FrameFlagsMapping
+    {
+        static readonly Dictionary<FrameType, Type> flagMap = new Dictionary<FrameType, Type>()
+        {
+            [FrameType.Data] = typeof(DataFrameFlags),
+            [FrameType.Headers] = typeof(HeadersFrameFlags),
+            [FrameType.Priority] = null,
+            [FrameType.ResetStream] = null,
+            [FrameType.Settings] = typeof(SettingsFrameFlags),
+            [FrameType.PushPromise] = typeof(PushPromiseFrameFlags),
+            [FrameType.Ping] = typeof(PingFrameFlags),
+            [FrameType.GoAway] = null,
+            [FrameType.WindowUpdate] = null,
+            [FrameType.Continuation] = typeof(ContinuationFrameFlags),
+        };
+
+        /// <summary>
+        /// Returns the enumeration that contains the flags for the given
+        /// frame type
+        /// </summary>
+        /// <param name="ft">The frame type</param>
+        public static Type GetFlagType(FrameType ft)
+        {
+            Type t;
+            var gotType = flagMap.TryGetValue(ft, out t);
+            if (gotType) return t;
+            else return null;
+        }
     }
 
 }

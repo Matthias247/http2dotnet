@@ -4,9 +4,19 @@ using System.Text;
 
 namespace Http2
 {
+    /// <summary>
+    /// Possible types of HTTP/2 errors
+    /// </summary>
     public enum ErrorType
     {
+        /// <summary>
+        /// The error affects the whole connection
+        /// </summary>
         ConnectionError,
+
+        /// <summary>
+        /// The error only affects a single stream
+        /// </summary>
         StreamError,
     }
 
@@ -31,6 +41,9 @@ namespace Http2
         Http11Required = 0xd,
     }
 
+    /// <summary>
+    /// Carries information about an occured error
+    /// </summary>
     public struct Http2Error
     {
         public ErrorType Type;
@@ -38,6 +51,9 @@ namespace Http2
         public string Message;
     }
 
+    /// <summary>
+    /// Utilities for HTTP/2 error codes
+    /// </summary>
     public static class ErrorCodeExtensions
     {
         private static readonly Dictionary<ErrorCode, string>
@@ -114,7 +130,7 @@ namespace Http2
         };
 
         /// <summary>
-        /// Returns a description for an HTTP/2 error code
+        /// Returns a human readable description for an HTTP/2 error code
         /// </summary>
         public static string Description(this ErrorCode code)
         {

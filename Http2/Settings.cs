@@ -35,6 +35,9 @@ namespace Http2
         public uint Value;
     }
 
+    /// <summary>
+    /// Utilities for working with SETTINGS frames and their data
+    /// </summary>
     public static class SettingTools
     {
         private static SettingMetaData MakeSettingMetaData(

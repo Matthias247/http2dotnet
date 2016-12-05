@@ -3,6 +3,9 @@ using System.Threading.Tasks;
 
 namespace Http2
 {
+    /// <summary>
+    /// Utility and extension functions for working with streams
+    /// </summary>
     public static class StreamUtils
     {
         /// <summary>

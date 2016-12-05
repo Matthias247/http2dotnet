@@ -1,5 +1,6 @@
 using System;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Http2
@@ -30,7 +31,7 @@ namespace Http2
         }
 
         /// <summary>
-        /// Reads the preface to the given stream and compares it to
+        /// Reads the preface from the given stream and compares it to
         /// the expected value.
         /// Will throw an error if the preface could not be read or if the stream
         /// has finished unexpectedly.
@@ -50,6 +51,36 @@ namespace Http2
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Reads the preface from the given stream and compares it to
+        /// the expected value.
+        /// Will throw an error if the preface could not be read or if the stream
+        /// has finished unexpectedly.
+        /// </summary>
+        public static async ValueTask<bool> ReadAsync(IStreamReader stream, int timoutMillis)
+        {
+            if (timoutMillis < 0) throw new ArgumentException(nameof(timoutMillis));
+            else if (timoutMillis == 0)
+            {
+                // No timeout
+                return await ReadAsync(stream);
+            }
+
+            var cts = new CancellationTokenSource();
+            var readTask = ReadAsync(stream).AsTask();
+            var timerTask = Task.Delay(timoutMillis, cts.Token);
+
+            var finishedTask = await Task.WhenAny(readTask, timerTask);
+            var hasTimeout = ReferenceEquals(timerTask, finishedTask);
+            // Cancel the timer which might be still running
+            cts.Cancel();
+            cts.Dispose();
+
+            if (hasTimeout) throw new TimeoutException();
+            // No timeout occured
+            return readTask.Result;
         }
     }
 }

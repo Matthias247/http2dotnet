@@ -45,7 +45,7 @@ namespace Http2
         ValueTask<object> CloseAsync();
     }
 
-    interface IStreamWriterCloser : IStreamWriter, IStreamCloser
+    public interface IStreamWriterCloser : IStreamWriter, IStreamCloser
     {
     }
 }
