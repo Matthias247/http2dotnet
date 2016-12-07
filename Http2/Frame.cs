@@ -87,6 +87,25 @@ namespace Http2
         }
 
         /// <summary>
+        /// Determines whether the EndOfStream flag is set on the frame
+        /// </summary>
+        public bool HasEndOfStreamFlag
+        {
+            get
+            {
+                switch (Type)
+                {
+                    case FrameType.Data:
+                        return (Flags & (byte)DataFrameFlags.EndOfStream) != 0;
+                    case FrameType.Headers:
+                        return (Flags & (byte)HeadersFrameFlags.EndOfStream) != 0;
+                    default:
+                        return false;
+                }
+            }
+        }
+
+        /// <summary>
         /// Reads a frame header from the given stream
         /// </summary>
         public static async ValueTask<FrameHeader> ReceiveAsync(
@@ -276,6 +295,88 @@ namespace Http2
             var gotType = flagMap.TryGetValue(ft, out t);
             if (gotType) return t;
             else return null;
+        }
+    }
+
+    /// <summary>
+    /// Data that is carried inside a window update frame
+    /// </summary>
+    public struct WindowUpdateData
+    {
+        public int WindowSizeIncrement;
+
+        public const int Size = 4;
+
+        /// <summary>
+        /// Encodes the window update data into the given byte array
+        /// This must be at least 4 bytes long
+        /// </summary>
+        public void EncodeInto(ArraySegment<byte> bytes)
+        {
+            var b = bytes.Array;
+            var o = bytes.Offset;
+
+            b[o+0] = (byte)((WindowSizeIncrement >> 24) & 0xFF);
+            b[o+1] = (byte)((WindowSizeIncrement >> 16) & 0xFF);
+            b[o+2] = (byte)((WindowSizeIncrement >> 8) & 0xFF);
+            b[o+3] = (byte)((WindowSizeIncrement) & 0xFF);
+        }
+    }
+
+    /// <summary>
+    /// Data that is carried inside a reset frame
+    /// </summary>
+    public struct ResetFrameData
+    {
+        public uint ErrorCode;
+
+        public const int Size = 4;
+
+        /// <summary>
+        /// Encodes the window update data into the given byte array
+        /// This must be at least 4 bytes long
+        /// </summary>
+        public void EncodeInto(ArraySegment<byte> bytes)
+        {
+            var b = bytes.Array;
+            var o = bytes.Offset;
+
+            b[o+0] = (byte)((ErrorCode >> 24) & 0xFF);
+            b[o+1] = (byte)((ErrorCode >> 16) & 0xFF);
+            b[o+2] = (byte)((ErrorCode >> 8) & 0xFF);
+            b[o+3] = (byte)((ErrorCode) & 0xFF);
+        }
+    }
+
+    /// <summary>
+    /// Data that is carried inside a GoAway frame
+    /// </summary>
+    public struct GoAwayFrameData
+    {
+        public int LastStreamId;
+        public uint ErrorCode;
+        public ArraySegment<byte> DebugData;
+
+        public int RequiredSize => 8 + DebugData.Count;
+
+        /// <summary>
+        /// Encodes the window update data into the given byte array
+        /// This must be at least RequiredSize bytes long
+        /// </summary>
+        public void EncodeInto(ArraySegment<byte> bytes)
+        {
+            var b = bytes.Array;
+            var o = bytes.Offset;
+
+            b[o+0] = (byte)((LastStreamId >> 24) & 0xFF);
+            b[o+1] = (byte)((LastStreamId >> 16) & 0xFF);
+            b[o+2] = (byte)((LastStreamId >> 8) & 0xFF);
+            b[o+3] = (byte)((LastStreamId) & 0xFF);
+            b[o+4] = (byte)((ErrorCode >> 24) & 0xFF);
+            b[o+5] = (byte)((ErrorCode >> 16) & 0xFF);
+            b[o+6] = (byte)((ErrorCode >> 8) & 0xFF);
+            b[o+7] = (byte)((ErrorCode) & 0xFF);
+            Array.Copy(DebugData.Array, DebugData.Offset, b, o+8, DebugData.Count);
         }
     }
 

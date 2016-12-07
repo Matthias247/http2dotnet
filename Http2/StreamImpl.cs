@@ -53,7 +53,7 @@ namespace Http2
             this.receiveWindow = receiveWindow;
             this.recvBuf = new RingBuf(recvBufSize);
         }
-        
+
         /// <summary>
         /// Adds a header that should be sent for the outgoing stream
         /// </summary>
@@ -157,6 +157,10 @@ namespace Http2
             {
                 await recvPossible;
 
+                int windowUpdateAmount = 0;
+                StreamReadResult result = new StreamReadResult();
+                bool hasResult = false;
+
                 lock (stateMutex)
                 {
                     if (state == StreamState.Reset)
@@ -170,26 +174,49 @@ namespace Http2
                         var toCopy = Math.Min(recvBuf.Available, buffer.Count);
                         recvBuf.Read(new ArraySegment<byte>(buffer.Array, buffer.Offset, buffer.Count));
 
-                        // TODO: Trigger window update
-                        // This should happens outside the lock
+                        // Calculate whether we should send a window update frame
+                        // after the read is complete.
+                        // Only need to do this if the stream has not yet ended
+                        if (state != StreamState.Closed && state != StreamState.HalfClosedRemote)
+                        {
+                            var freeWindow = recvBuf.Capacity - this.receiveWindow;
+                            if (freeWindow >= (recvBuf.Capacity/2))
+                            {
+                                windowUpdateAmount = freeWindow;
+                                receiveWindow += windowUpdateAmount;
+                            }
+                        }
 
-                        return new StreamReadResult{
+                        result = new StreamReadResult{
                             BytesRead = toCopy,
                             EndOfStream = false,
                         };
+                        hasResult = true;
                     }
-                    
+
                     if (state == StreamState.Closed || state == StreamState.HalfClosedRemote)
                     {
-                        return new StreamReadResult{
+                        result = new StreamReadResult{
                             BytesRead = 0,
                             EndOfStream = true,
                         };
+                        hasResult = true;
                     }
 
                     // No data and not closed or reset
                     // Sleep until data arrives or stream is reset
                     recvPossible.Reset();
+                }
+
+                if (hasResult)
+                {
+                    if (windowUpdateAmount > 0)
+                    {
+                        // We need to send a window update frame before delivering
+                        // the result
+                        await SendWindowUpdate(windowUpdateAmount);
+                    }
+                    return result;
                 }
             }
         }
@@ -197,34 +224,31 @@ namespace Http2
         /// <summary>
         /// Checks whether a window update needs to be sent and enqueues it at the session
         /// </summary>
-        private async ValueTask<bool> TryQueueWindowUpdate()
+        private async ValueTask<object> SendWindowUpdate(int amount)
         {
-            // Determine the delta update
-            var max = recvBuf.Capacity;
-            var delta = max - this.receiveWindow;
-
-            // Determine the flags if any
-            var flags = this._generateSendFlags();
-
-            // Check if we can omit the update
-            if (delta < (max/2) && flags == 0)
-            {
-                return false;
-            }
-
-            // Update our window
-            this.receiveWindow += delta;
-
             // Send the header
-            var fh: frame.FrameHeader = {
-                version: frame.Version,
-                streamId: this.id,
-                type: frame.FrameType.WINDOW_UPDATE,
-                flags: flags,
-                length: delta,
+            var fh = new FrameHeader {
+                StreamId = this.Id,
+                Type = FrameType.WindowUpdate,
+                Flags = 0,
             };
 
-            var sendPromise = this._session.writeToConn(fh, null);
+            var updateData = new WindowUpdateData
+            {
+                WindowSizeIncrement = amount,
+            };
+
+            try
+            {
+                await this.connection.Writer.WriteWindowUpdate(fh, updateData);
+            }
+            catch (Exception)
+            {
+                // We ignore errors on sending window updates since they are
+                // not important to the reading process
+            }
+
+            return null;
         }
 
         public async ValueTask<object> WriteAsync(ArraySegment<byte> buffer)
@@ -288,7 +312,7 @@ namespace Http2
                     this._sendClose();
                     if (removeStream)
                     {
-                        this.connection._removeStream(this.id);
+                        this.connection._removeStream(this.Id);
                     }
                     WakeupWaiters();
                     // TODO: We currently only wake up the reader,

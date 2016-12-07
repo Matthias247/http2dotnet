@@ -47,5 +47,7 @@ namespace Http2
             /// </summary>
             public Dictionary<SettingId, Setting> Settings;
         }
+
+        internal ConnectionWriter Writer;
     }
 }

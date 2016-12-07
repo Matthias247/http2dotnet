@@ -23,7 +23,7 @@ namespace Http2
     /// <summary>
     /// Error codes that are standardized for HTTP/2
     /// </summary>
-    public enum ErrorCode
+    public enum ErrorCode : uint
     {
         NoError = 0x0,
         ProtocolError = 0x1,

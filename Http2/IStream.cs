@@ -23,11 +23,11 @@ namespace Http2
     /// </summary>
     public interface IStream : IStreamReader, IStreamWriterCloser
     {
-        /// <summary> The ID of the stream</summary>
-        int Id { get; }
-        /// <summary> Returns the current state of the stream</summary>
+        /// <summary>The ID of the stream</summary>
+        uint Id { get; }
+        /// <summary>Returns the current state of the stream</summary>
         StreamState State { get; }
-        /// <summary> Resets the stream</summary>
+        /// <summary>Resets the stream</summary>
         ValueTask<object> Reset();
     }
 }

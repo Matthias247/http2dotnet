@@ -19,11 +19,19 @@ namespace Http2
 
     internal struct SettingMetaData
     {
-        /// <summary>Initial values for the setting as defined in the HTTP/2 specification</summary>
+        /// <summary>
+        /// Initial values for the setting as defined in the HTTP/2 specification
+        /// </summary>
         public uint InitialValue;
-        /// <summary>Minimum values for the setting as defined in the HTTP/2 specification</summary>
+
+        /// <summary>
+        /// Minimum values for the setting as defined in the HTTP/2 specification
+        /// </summary>
         public uint MinValue;
-        /// <summary>Maximum values for the setting as defined in the HTTP/2 specification</summary>
+
+        /// <summary>
+        /// Maximum values for the setting as defined in the HTTP/2 specification
+        /// </summary>
         public uint MaxValue;
     }
 

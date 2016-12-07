@@ -4,6 +4,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Http2;
+using Http2.Internal;
 using Xunit;
 
 namespace Http2Tests

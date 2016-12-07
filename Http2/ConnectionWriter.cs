@@ -30,7 +30,6 @@ namespace Http2
             public int Window;
             public Queue<WriteRequest> WriteQueue;
             public bool EndOfStreamQueued;
-            public bool ResetQueued;
         }
 
         // This needs be a class in order to be mutatable
@@ -65,7 +64,7 @@ namespace Http2
         /// <summary>Streams for which data needs to be written</summary>
         List<StreamData> Streams = new List<StreamData>();
 
-        private SemaphoreSlim mutex = new SemaphoreSlim(1);
+        private Object mutex = new Object();
         private AsyncManualResetEvent wakeupWriter = new AsyncManualResetEvent(false);
         private TaskCompletionSource<bool> doneTcs = new TaskCompletionSource<bool>();
         private bool closed = false;
@@ -98,13 +97,13 @@ namespace Http2
             // TODO: Pooling
             this.outBuf = new byte[FrameHeader.HeaderSize + options.MaxFrameSize];
             // Start the task that performs the actual writing
-            Task.Run(() => this.Run());
+            Task.Run(() => this.RunAsync());
         }
 
         /// <summary>
         /// The mainloop of the connection writer
         /// </summary>
-        private async Task Run()
+        private async Task RunAsync()
         {
             try
             {
@@ -114,28 +113,29 @@ namespace Http2
                     // Wait until there is something to do for us
                     await this.wakeupWriter;
                     // Fetch the next task from shared information
-                    await this.mutex.WaitAsync();
-                    WriteRequest writeRequest = GetNextReadyWriteRequest();
+                    WriteRequest writeRequest = null;
                     bool doClose = false;
-                    // Copy the maximum frame size inside the lock to avoid races
-                    int maxFrameSize = options.MaxFrameSize;
-
-                    // If there's nothing to write check if we should close the connection
-                    if (writeRequest != null)
+                    lock (this.mutex)
                     {
-                        if (this.closeRequested)
+                        writeRequest = GetNextReadyWriteRequest();
+                        // Copy the maximum frame size inside the lock to avoid races
+                        int maxFrameSize = options.MaxFrameSize;
+                        // If there's nothing to write check if we should close the connection
+                        if (writeRequest != null)
                         {
-                            doClose = true;
-                        }
-                        else
-                        {
-                            // There is really no task for us.
-                            // Sleep until we got one
-                            this.wakeupWriter.Reset();
+                            if (this.closeRequested)
+                            {
+                                doClose = true;
+                            }
+                            else
+                            {
+                                // There is really no task for us.
+                                // Sleep until we got one.
+                                // When we loop around we will sleep in await wakeupWriter
+                                this.wakeupWriter.Reset();
+                            }
                         }
                     }
-
-                    this.mutex.Release();
 
                     if (writeRequest != null)
                     {
@@ -149,7 +149,7 @@ namespace Http2
                     }
                 }
             }
-            catch (Exception e)
+            catch (Exception)
             {
                 // We will catch this exception if writing to the output stream
                 // will fail at any point of time
@@ -159,14 +159,19 @@ namespace Http2
             finally
             {
                 // Set the closed flag which will avoid new write items to be added
-                await this.mutex.WaitAsync();
-                closed = true;
-                this.mutex.Release();
+                lock (mutex)
+                {
+                    closed = true;
+                }
                 // TODO: Fail pending writes that are still queued up
                 doneTcs.SetResult(true);
             }
         }
 
+        /// <summary>
+        /// Retrieves the next write request from the internal queues
+        /// This may only be called within the lock
+        /// </summary>
         private WriteRequest GetNextReadyWriteRequest()
         {
             // Look if there are writes necessary for the connection queue
@@ -183,8 +188,10 @@ namespace Http2
             // This logic is quite primitive at the moment and won't be fair to
             // higher stream numbers. However the flow control windows will avoid
             // total starvation for those
-            foreach (var s in Streams)
+            for (var i = 0; i < Streams.Count; i++)
             {
+                var s = Streams[i];
+                i++;
                 if (s.WriteQueue.Count == 0) continue;
                 var first = s.WriteQueue.Peek();
                 // If it's not a data frame we can always write it
@@ -212,7 +219,18 @@ namespace Http2
                     }
                 }
                 // We have not continued, so we can write this item
-                return s.WriteQueue.Dequeue();
+                first = s.WriteQueue.Dequeue();
+                // Determine whether we can remove the stream entry
+                // If this is the end of a stream or a reset frame no other frames
+                // will follow and we can remove it.
+                // Window update frames are send through the generic queue
+                if (first.Header.Type == FrameType.ResetStream || first.Header.HasEndOfStreamFlag)
+                {
+                    Streams.RemoveAt(i-1);
+                    // TODO: Still need to make sure that the queue inside this stream
+                    // does not contain anything after the written element
+                }
+                return first;
             }
 
             return null;
@@ -254,6 +272,16 @@ namespace Http2
             }
             finally
             {
+                // If this was the end of a stream then we don't need the stream
+                // data anymore
+                if (wr.Header.HasEndOfStreamFlag)
+                {
+                    lock (mutex) // TODO: This messy
+                    {
+                        RemoveStream(wr.Header.StreamId);
+                    }
+                }
+
                 if (wr.Completed != null)
                 {
                     wr.Completed.Set();
@@ -275,27 +303,53 @@ namespace Http2
             return this.outStream.WriteAsync(data);
         }
 
-        private void CheckClosed()
+        private void ThrowIfClosed()
         {
             if (this.closed)
             {
-                mutex.Release();
                 throw new Exception("Writer is closed");
             }
         }
 
         private bool TryEnqueueWriteRequest(uint streamId, WriteRequest wr)
         {
-            if (streamId == 0)
+            if (streamId == 0 ||
+                wr.Header.Type == FrameType.WindowUpdate ||
+                wr.Header.Type == FrameType.ResetStream)
             {
                 this.WriteQueue.Enqueue(wr);
+                // Possible improvement for resets: Check if a reset for that stream
+                // ID is already queued.
+                // If we queue a reset frame for a stream we don't need
+                // the writequeue for it anymore. Any queued up frames for that
+                // stream may proceed as written.
+                // TODO: Actually they have failed due to a reset stream.
+                // But we can't signal that at the moment. Does that make a
+                // difference to the application?
+                // Maybe, because it get's a write signaled that ending a stream
+                // suceeded while in reality it has failed
+                if (wr.Header.Type == FrameType.ResetStream && streamId != 0)
+                {
+                    this.RemoveStream(streamId);
+                }
+                 
                 return true;
             }
 
-            foreach (var stream in Streams)
+            for (var i = 0; i < Streams.Count; i++)
             {
+                var stream = Streams[i];
                 if (stream.StreamId == streamId)
                 {
+                    // TODO: If a reset or end of stream is already queued
+                    // we may not queue up the new item
+                    // In case a reset was queued the stream will already be
+                    // removed and we won't end up in here.
+                    if (wr.Header.HasEndOfStreamFlag)
+                    {
+                        stream.EndOfStreamQueued = true;
+                        Streams[i] = stream;
+                    }
                     stream.WriteQueue.Enqueue(wr);
                     return true;
                 }
@@ -319,10 +373,9 @@ namespace Http2
             uint streamId, Action<WriteRequest> populateRequest)
         {
             WriteRequest wr = null;
-            await mutex.WaitAsync();
-            try
+            lock (mutex)
             {
-                CheckClosed();
+                ThrowIfClosed();
                 wr = AllocateWriteRequest();
                 populateRequest(wr);
 
@@ -332,10 +385,6 @@ namespace Http2
                 {
                     throw new Exception("Stream is not writable");
                 }
-            }
-            finally
-            {
-                mutex.Release();
             }
 
             // Wakeup the task
@@ -425,38 +474,6 @@ namespace Http2
                     wr1.Header = header;
                     wr1.Data = data;
                 });
-                
-            // WriteRequest wr = null;
-            // await mutex.WaitAsync();
-            // try
-            // {
-            //     CheckClosed();
-            //     wr = AllocateWriteRequest();
-            //     wr.Header = header;
-            //     wr.Data = data;
-
-            //     var enqueued = TryEnqueueWriteRequest(header.StreamId, wr);
-
-            //     if (!enqueued)
-            //     {
-            //         throw new Exception("Stream is not writable");
-            //     }
-            // }
-            // finally
-            // {
-            //     mutex.Release();
-            // }
-
-            // // Wakeup the task
-            // // TODO: We might wakeup the task only if we also have a flow control
-            // // window. However that isn't currently reported by TryEnqueueWriteRequest
-            // // and would only be a minor optimization
-            // wakeupWriter.Set();
-            // // Wait until the request was written
-            // await wr.Completed;
-            // ReleaseWriteRequest(wr);
-
-            // return null;
         }
 
         /// <summary>
@@ -474,10 +491,6 @@ namespace Http2
             await this.outStream.WriteAsync(wr.Data);
 
             return null;
-
-            // TODO: If end of stream is set we may want to remove the stream from the
-            // outgoing list afterwards
-            // TODO_TODO: End of stream might also be set after other streams
         }
 
         /// <summary>
@@ -526,9 +539,6 @@ namespace Http2
 
             // Write the header
             return this.outStream.WriteAsync(data);
-
-            // TODO: After writing a reset frame no further frame data might
-            // be written for that stream
         }
 
         /// <summary>
@@ -563,7 +573,7 @@ namespace Http2
             var isContinuation = false;
 
             // TODO:
-            // We currently don't respect the SETTINGS_MAX_HEADER_LIST_SIZE 
+            // We currently don't respect the SETTINGS_MAX_HEADER_LIST_SIZE
             // limit for the complete header block.
             // However implementing it would only help partially, since the stream
             // would now fail on this side instead of the remote side.
@@ -618,8 +628,6 @@ namespace Http2
             }
 
             return null;
-            // TODO: If end of stream is set we may want to remove the stream from the
-            // outgoing list afterwards
         }
 
         private ValueTask<object> WritePushPromise(WriteRequest wr)
@@ -638,26 +646,47 @@ namespace Http2
         /// </summary>
         public async Task<bool> RegisterStream(uint streamId, int flowWindow)
         {
-            await mutex.WaitAsync();
-            // After close is initiated or errors happened no further streams
-            // may be registered
-            if (this.closed)
+            lock (mutex)
             {
-                mutex.Release();
-                return false;
+                // After close is initiated or errors happened no further streams
+                // may be registered
+                if (this.closed)
+                {
+                    return false;
+                }
+
+                var sd = new StreamData{
+                    StreamId = streamId,
+                    Window = flowWindow,
+                    WriteQueue = new Queue<WriteRequest>(),
+                    EndOfStreamQueued = false,
+                };
+                this.Streams.Add(sd);
             }
 
-            var sd = new StreamData{
-                StreamId = streamId,
-                Window = flowWindow,
-                WriteQueue = new Queue<WriteRequest>(),
-                EndOfStreamQueued = false,
-                ResetQueued = false,
-            };
-            this.Streams.Add(sd);
-
-            mutex.Release();
             return true;
+        }
+
+        private void RemoveStream(uint streamId)
+        {
+            Queue<WriteRequest> writeQueue = null;
+            for (var i = 0; i < Streams.Count; i++)
+            {
+                var s = Streams[i];
+                if (s.StreamId == streamId)
+                {
+                    writeQueue = s.WriteQueue;
+                    Streams.RemoveAt(i);
+                    break;
+                }
+            }
+
+            // Signal the writes as finished
+            // TODO: Actually those are failed
+            foreach (var elem in writeQueue)
+            {
+                elem.Completed.Set();
+            }
         }
 
         /// <summary>
@@ -667,9 +696,10 @@ namespace Http2
         {
             // It doesn't really matter if the writer is already closed.
             // We just set the value
-            await mutex.WaitAsync();
-            this.options.MaxFrameSize = maxFrameSize;
-            mutex.Release();
+            lock (mutex)
+            {
+                this.options.MaxFrameSize = maxFrameSize;
+            }
         }
 
         /// <summary>
@@ -677,21 +707,20 @@ namespace Http2
         /// </summary>
         public async Task UpdateMaximumHeaderTableSize(int newMaxHeaderTableSize)
         {
-            await mutex.WaitAsync();
-            
-            if (this.hEncoder.DynamicTableSize <= newMaxHeaderTableSize)
+            lock (mutex)
             {
-                // We can just keep the current setting
+                if (this.hEncoder.DynamicTableSize <= newMaxHeaderTableSize)
+                {
+                    // We can just keep the current setting
+                }
+                else
+                {
+                    // We should lower ower header table size and send a notification
+                    // about that. However this this currently not supported.
+                    // Additionally changing the size would cause a data race, as
+                    // it is concurrently used by the writer process.
+                }
             }
-            else
-            {
-                // We should lower ower header table size and send a notification
-                // about that. However this this currently not supported.
-                // Additionally changing the size would cause a data race, as
-                // it is concurrently used by the writer process.
-            }
-
-            mutex.Release();
         }
 
         /// <summary>
@@ -701,30 +730,29 @@ namespace Http2
         /// </summary>
         public async Task UpdateFlowControlWindow(int streamId, int amount)
         {
-            await mutex.WaitAsync();
             var wakeup = false;
-            
-            if (streamId == 0)
+            lock (mutex)
             {
-                if (connFlowWindow == 0) wakeup = true;
-                connFlowWindow += amount; // TODO: Check for overflow
-            }
-            else
-            {
-                for (var i = 0; i < Streams.Count; i++)
+                if (streamId == 0)
                 {
-                    if (Streams[i].StreamId == streamId)
+                    if (connFlowWindow == 0) wakeup = true;
+                    connFlowWindow += amount; // TODO: Check for overflow
+                }
+                else
+                {
+                    for (var i = 0; i < Streams.Count; i++)
                     {
-                        var s = Streams[i];
-                        if (s.Window == 0) wakeup = true;
-                        s.Window += amount; // TODO: Check for overflow
-                        Streams[i] = s;
-                        break;
+                        if (Streams[i].StreamId == streamId)
+                        {
+                            var s = Streams[i];
+                            if (s.Window == 0 && s.WriteQueue.Count > 0) wakeup = true;
+                            s.Window += amount; // TODO: Check for overflow
+                            Streams[i] = s;
+                            break;
+                        }
                     }
                 }
             }
-
-            mutex.Release();
 
             if (wakeup)
             {

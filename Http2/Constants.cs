@@ -14,5 +14,8 @@ namespace Http2
 
         /// <summary>The HTTP/2 connection preface bytes</summary>
         public static readonly byte[] ConnectionPrefaceBytes = Encoding.ASCII.GetBytes(ConnectionPreface);
+
+        /// <summary>The initial flow control window for connections</summary>
+        public const int InitialConnectionWindowSize = 65535;
     }
 }
