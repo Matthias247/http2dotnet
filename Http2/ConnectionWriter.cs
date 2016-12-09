@@ -32,6 +32,27 @@ namespace Http2
             public bool EndOfStreamQueued;
         }
 
+        /// <summary>
+        /// Signals the result of a write operation
+        /// </summary>
+        public enum WriteResult
+        {
+            /// <summary>Write is still in progress</summary>
+            InProgress,
+            /// <summary>Write succeded</summary>
+            Success,
+            /// <summary>
+            /// Write failed because the write to the underlying connection failed
+            /// </summary>
+            ConnectionError,
+            /// <summary>
+            /// Write failed because the write to the underlying connection is closed
+            /// </summary>
+            ConnectionClosedError,
+            /// <summary>Write failed because the stream was reset</summary>
+            StreamResetError,
+        }
+
         // This needs be a class in order to be mutatable
         private class WriteRequest
         {
@@ -42,6 +63,7 @@ namespace Http2
             public List<HeaderField> Headers;
             public ArraySegment<byte> Data;
             public AsyncManualResetEvent Completed;
+            public WriteResult Result;
         }
 
         /// <summary>The associated connection</summary>
@@ -236,7 +258,7 @@ namespace Http2
             return null;
         }
 
-        private ValueTask<object> ProcessWriteRequest(WriteRequest wr, int maxFrameSize)
+        private async ValueTask<object> ProcessWriteRequest(WriteRequest wr, int maxFrameSize)
         {
             // TODO: In general we SHOULD check whether the data payload exceeds the
             // maximum frame size. It is just copied at the moment
@@ -247,28 +269,43 @@ namespace Http2
                 switch (wr.Header.Type)
                 {
                     case FrameType.Headers:
-                        return WriteHeaders(wr, maxFrameSize);
+                        await WriteHeaders(wr, maxFrameSize);
+                        break;
                     case FrameType.PushPromise:
-                        return WritePushPromise(wr);
+                        await WritePushPromise(wr);
+                        break;
                     case FrameType.Data:
-                        return WriteDataFrame(wr);
+                        await WriteDataFrame(wr);
+                        break;
                     case FrameType.GoAway:
-                        return WriteGoAwayFrame(wr);
+                        await WriteGoAwayFrame(wr);
+                        break;
                     case FrameType.Continuation:
                         throw new Exception("Continuations might not be directly queued");
                     case FrameType.Ping:
-                        return WritePingFrame(wr);
+                        await WritePingFrame(wr);
+                        break;
                     case FrameType.Priority:
-                        return WritePriorityFrame(wr);
+                        await WritePriorityFrame(wr);
+                        break;
                     case FrameType.ResetStream:
-                        return WriteResetFrame(wr);
+                        await WriteResetFrame(wr);
+                        break;
                     case FrameType.WindowUpdate:
-                        return WriteWindowUpdateFrame(wr);
+                        await WriteWindowUpdateFrame(wr);
+                        break;
                     case FrameType.Settings:
-                        return WriteSettingsFrame(wr);
+                        await WriteSettingsFrame(wr);
+                        break;
                     default:
                         throw new Exception("Unknown frame type");
                 }
+                wr.Result = WriteResult.Success;
+            }
+            catch (Exception)
+            {
+                wr.Result = WriteResult.ConnectionError;
+                throw;
             }
             finally
             {
@@ -303,14 +340,6 @@ namespace Http2
             return this.outStream.WriteAsync(data);
         }
 
-        private void ThrowIfClosed()
-        {
-            if (this.closed)
-            {
-                throw new Exception("Writer is closed");
-            }
-        }
-
         private bool TryEnqueueWriteRequest(uint streamId, WriteRequest wr)
         {
             if (streamId == 0 ||
@@ -323,16 +352,11 @@ namespace Http2
                 // If we queue a reset frame for a stream we don't need
                 // the writequeue for it anymore. Any queued up frames for that
                 // stream may proceed as written.
-                // TODO: Actually they have failed due to a reset stream.
-                // But we can't signal that at the moment. Does that make a
-                // difference to the application?
-                // Maybe, because it get's a write signaled that ending a stream
-                // suceeded while in reality it has failed
                 if (wr.Header.Type == FrameType.ResetStream && streamId != 0)
                 {
                     this.RemoveStream(streamId);
                 }
-                 
+
                 return true;
             }
 
@@ -366,24 +390,28 @@ namespace Http2
 
         private void ReleaseWriteRequest(WriteRequest wr)
         {
+            wr.Result = WriteResult.InProgress;
             wr.Completed.Reset();
         }
 
-        private async ValueTask<object> PerformWriteRequest(
+        private async ValueTask<WriteResult> PerformWriteRequest(
             uint streamId, Action<WriteRequest> populateRequest)
         {
             WriteRequest wr = null;
             lock (mutex)
             {
-                ThrowIfClosed();
+                if (this.closed)
+                {
+                    return WriteResult.ConnectionClosedError;
+                }
+
                 wr = AllocateWriteRequest();
                 populateRequest(wr);
 
                 var enqueued = TryEnqueueWriteRequest(streamId, wr);
-
                 if (!enqueued)
                 {
-                    throw new Exception("Stream is not writable");
+                    return WriteResult.StreamResetError;
                 }
             }
 
@@ -394,12 +422,19 @@ namespace Http2
             wakeupWriter.Set();
             // Wait until the request was written
             await wr.Completed;
+            // Copy the result before releasing the writeRequest
+            var result = wr.Result;
             ReleaseWriteRequest(wr);
 
-            return null;
+            if (result == WriteResult.InProgress)
+            {
+                throw new Exception("Unexpected: Write is still marked as in progress");
+            }
+
+            return result;
         }
 
-        public ValueTask<object> WriteHeaders(
+        public ValueTask<WriteResult> WriteHeaders(
             FrameHeader header, List<HeaderField> headers)
         {
             return PerformWriteRequest(
@@ -410,7 +445,7 @@ namespace Http2
                 });
         }
 
-        public ValueTask<object> WriteSettings(
+        public ValueTask<WriteResult> WriteSettings(
             FrameHeader header, ArraySegment<byte> data)
         {
             return PerformWriteRequest(
@@ -421,7 +456,7 @@ namespace Http2
                 });
         }
 
-        public ValueTask<object> WriteResetStream(
+        public ValueTask<WriteResult> WriteResetStream(
             FrameHeader header, ResetFrameData data)
         {
             return PerformWriteRequest(
@@ -432,7 +467,7 @@ namespace Http2
                 });
         }
 
-        public ValueTask<object> WritePing(
+        public ValueTask<WriteResult> WritePing(
             FrameHeader header, ArraySegment<byte> data)
         {
             return PerformWriteRequest(
@@ -443,7 +478,7 @@ namespace Http2
                 });
         }
 
-        public ValueTask<object> WriteWindowUpdate(
+        public ValueTask<WriteResult> WriteWindowUpdate(
             FrameHeader header, WindowUpdateData data)
         {
             return PerformWriteRequest(
@@ -454,7 +489,7 @@ namespace Http2
                 });
         }
 
-        public ValueTask<object> WriteGoAway(
+        public ValueTask<WriteResult> WriteGoAway(
             FrameHeader header, GoAwayFrameData data)
         {
             return PerformWriteRequest(
@@ -465,7 +500,7 @@ namespace Http2
                 });
         }
 
-        public ValueTask<object> WriteData(
+        public ValueTask<WriteResult> WriteData(
             FrameHeader header, ArraySegment<byte> data)
         {
             return PerformWriteRequest(
@@ -681,10 +716,10 @@ namespace Http2
                 }
             }
 
-            // Signal the writes as finished
-            // TODO: Actually those are failed
+            // Signal the writes as finished with an ResetError
             foreach (var elem in writeQueue)
             {
+                elem.Result = WriteResult.StreamResetError;
                 elem.Completed.Set();
             }
         }
