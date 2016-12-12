@@ -49,5 +49,11 @@ namespace Http2
         }
 
         internal ConnectionWriter Writer;
+
+        /// <summary>
+        /// Whether the connection represents the client or server part of
+        /// a HTTP/2 connection. True for servers.
+        /// </summary>
+        public readonly bool IsServer;
     }
 }

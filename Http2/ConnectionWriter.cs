@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -60,7 +61,7 @@ namespace Http2
             public WindowUpdateData WindowUpdateData;
             public ResetFrameData ResetFrameData;
             public GoAwayFrameData GoAwayData;
-            public List<HeaderField> Headers;
+            public IEnumerable<HeaderField> Headers;
             public ArraySegment<byte> Data;
             public AsyncManualResetEvent Completed;
             public WriteResult Result;
@@ -137,11 +138,12 @@ namespace Http2
                     // Fetch the next task from shared information
                     WriteRequest writeRequest = null;
                     bool doClose = false;
+                    int maxFrameSize = 0;
                     lock (this.mutex)
                     {
                         writeRequest = GetNextReadyWriteRequest();
                         // Copy the maximum frame size inside the lock to avoid races
-                        int maxFrameSize = options.MaxFrameSize;
+                        maxFrameSize = options.MaxFrameSize;
                         // If there's nothing to write check if we should close the connection
                         if (writeRequest != null)
                         {
@@ -161,7 +163,7 @@ namespace Http2
 
                     if (writeRequest != null)
                     {
-                        await ProcessWriteRequest(writeRequest, maxFrameSize);
+                        await ProcessWriteRequestAsync(writeRequest, maxFrameSize);
                     }
                     else if (doClose)
                     {
@@ -228,11 +230,10 @@ namespace Http2
                         // We can write a part of the request
                         // In order to write the complete request we have to segment it
                         s.WriteQueue.Dequeue();
-                        var we = new WriteRequest();
+                        var we = AllocateWriteRequest();
                         we.Header = first.Header;
                         we.Data = new ArraySegment<byte>(
                             first.Data.Array, first.Data.Offset, availableFlow);
-                        we.Completed = null; // Don't send the completion notification
                         // Adjust the amount of bytes that have to be written later on
                         var oldData = first.Data;
                         first.Data = new ArraySegment<byte>(
@@ -258,7 +259,7 @@ namespace Http2
             return null;
         }
 
-        private async ValueTask<object> ProcessWriteRequest(WriteRequest wr, int maxFrameSize)
+        private async ValueTask<object> ProcessWriteRequestAsync(WriteRequest wr, int maxFrameSize)
         {
             // TODO: In general we SHOULD check whether the data payload exceeds the
             // maximum frame size. It is just copied at the moment
@@ -315,15 +316,22 @@ namespace Http2
                 {
                     lock (mutex) // TODO: This messy
                     {
-                        RemoveStream(wr.Header.StreamId);
+                        RemoveStreamLocked(wr.Header.StreamId);
                     }
                 }
 
-                if (wr.Completed != null)
+                if (wr.Header.Type == FrameType.Continuation)
+                {
+                    // Nobody is waiting for the write request
+                    // which means nobody will release it afterwards
+                    ReleaseWriteRequest(wr);
+                }
+                else
                 {
                     wr.Completed.Set();
                 }
             }
+            return null;
         }
 
         private ValueTask<object> WriteWindowUpdateFrame(WriteRequest wr)
@@ -354,7 +362,7 @@ namespace Http2
                 // stream may proceed as written.
                 if (wr.Header.Type == FrameType.ResetStream && streamId != 0)
                 {
-                    this.RemoveStream(streamId);
+                    this.RemoveStreamLocked(streamId);
                 }
 
                 return true;
@@ -365,10 +373,12 @@ namespace Http2
                 var stream = Streams[i];
                 if (stream.StreamId == streamId)
                 {
-                    // TODO: If a reset or end of stream is already queued
-                    // we may not queue up the new item
-                    // In case a reset was queued the stream will already be
-                    // removed and we won't end up in here.
+                    // If a reset or end of stream is already queued
+                    // we are not allowed to queue any additional item,
+                    // as that would cause the receiver to receive a headers
+                    // or data frame for an already reset stream.
+                    // However in case a reset was queued the stream will
+                    // already be removed and we won't end up in here.
                     if (wr.Header.HasEndOfStreamFlag)
                     {
                         stream.EndOfStreamQueued = true;
@@ -391,6 +401,10 @@ namespace Http2
         private void ReleaseWriteRequest(WriteRequest wr)
         {
             wr.Result = WriteResult.InProgress;
+            wr.Headers = null;
+            // TODO: Might leak memory inside the data
+            // and goaway frames if we use a real pool allocator
+            // for this
             wr.Completed.Reset();
         }
 
@@ -423,6 +437,7 @@ namespace Http2
             // Wait until the request was written
             await wr.Completed;
             // Copy the result before releasing the writeRequest
+            // After ReleaseWriteRequest wr will be invalid
             var result = wr.Result;
             ReleaseWriteRequest(wr);
 
@@ -435,7 +450,7 @@ namespace Http2
         }
 
         public ValueTask<WriteResult> WriteHeaders(
-            FrameHeader header, List<HeaderField> headers)
+            FrameHeader header, IEnumerable<HeaderField> headers)
         {
             return PerformWriteRequest(
                 header.StreamId,
@@ -505,9 +520,9 @@ namespace Http2
         {
             return PerformWriteRequest(
                 header.StreamId,
-                wr1 => {
-                    wr1.Header = header;
-                    wr1.Data = data;
+                wr => {
+                    wr.Header = header;
+                    wr.Data = data;
                 });
         }
 
@@ -604,7 +619,8 @@ namespace Http2
 
             // Try to encode as much headers as possible into the frame
             var headers = wr.Headers;
-            var nrHeaders = headers.Count;
+            var nrTotalHeaders = headers.Count();
+            var sentHeaders = 0;
             var isContinuation = false;
 
             // TODO:
@@ -617,7 +633,8 @@ namespace Http2
             {
                 // Encode a header block fragment
                 var encodeResult = this.hEncoder.Encode(headers, maxFrameSize);
-                var remaining = nrHeaders - encodeResult.FieldCount;
+                sentHeaders += encodeResult.FieldCount;
+                var remaining = nrTotalHeaders - sentHeaders;
 
                 FrameHeader hdr = wr.Header;
                 hdr.Length = encodeResult.Bytes.Length;
@@ -648,8 +665,7 @@ namespace Http2
                     outBuf, 0, FrameHeader.HeaderSize + encodeResult.Bytes.Length);
                 await this.outStream.WriteAsync(dataView);
 
-                nrHeaders = remaining;
-                if (nrHeaders == 0)
+                if (remaining == 0)
                 {
                     break;
                 }
@@ -658,7 +674,7 @@ namespace Http2
                     isContinuation = true;
                     // TODO: Might not be the best way to create a slice,
                     // as that might allocate without need
-                    headers = headers.GetRange(encodeResult.FieldCount, nrHeaders);
+                    headers = wr.Headers.Skip(sentHeaders);
                 }
             }
 
@@ -702,7 +718,20 @@ namespace Http2
             return true;
         }
 
-        private void RemoveStream(uint streamId)
+        /// <summary>
+        /// Removes the stream with the given stream ID fromt he writer.
+        /// Pending writes will be canceled.
+        /// This does not cancel any pending WindowUpdate or ResetStream writes
+        /// </summary>
+        public void RemoveStream(uint streamId)
+        {
+            lock (mutex)
+            {
+                RemoveStreamLocked(streamId);
+            }
+        }
+
+        private void RemoveStreamLocked(uint streamId)
         {
             Queue<WriteRequest> writeQueue = null;
             for (var i = 0; i < Streams.Count; i++)
@@ -727,7 +756,7 @@ namespace Http2
         /// <summary>
         /// Updates the maximum frame size to the new value
         /// </summary>
-        public async Task UpdateMaximumFrameSize(int maxFrameSize)
+        public void UpdateMaximumFrameSize(int maxFrameSize)
         {
             // It doesn't really matter if the writer is already closed.
             // We just set the value
@@ -763,7 +792,7 @@ namespace Http2
         /// If the streamId is 0 the window of the connection will be increased.
         /// Amount must be a positive number
         /// </summary>
-        public async Task UpdateFlowControlWindow(int streamId, int amount)
+        public void UpdateFlowControlWindow(int streamId, int amount)
         {
             var wakeup = false;
             lock (mutex)

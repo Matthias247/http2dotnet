@@ -328,7 +328,7 @@ namespace Http2
     /// </summary>
     public struct ResetFrameData
     {
-        public uint ErrorCode;
+        public ErrorCode ErrorCode;
 
         public const int Size = 4;
 
@@ -340,11 +340,12 @@ namespace Http2
         {
             var b = bytes.Array;
             var o = bytes.Offset;
+            var ec = (uint)ErrorCode;
 
-            b[o+0] = (byte)((ErrorCode >> 24) & 0xFF);
-            b[o+1] = (byte)((ErrorCode >> 16) & 0xFF);
-            b[o+2] = (byte)((ErrorCode >> 8) & 0xFF);
-            b[o+3] = (byte)((ErrorCode) & 0xFF);
+            b[o+0] = (byte)((ec >> 24) & 0xFF);
+            b[o+1] = (byte)((ec >> 16) & 0xFF);
+            b[o+2] = (byte)((ec >> 8) & 0xFF);
+            b[o+3] = (byte)((ec) & 0xFF);
         }
     }
 

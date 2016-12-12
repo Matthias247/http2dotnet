@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
+
+using Hpack;
 
 namespace Http2
 {
@@ -29,5 +32,11 @@ namespace Http2
         StreamState State { get; }
         /// <summary>Resets the stream</summary>
         ValueTask<object> Reset();
+
+        ValueTask<object> WriteHeaders(IEnumerable<HeaderField> headers, bool endOfStream);
+
+        ValueTask<object> WriteTrailers(IEnumerable<HeaderField> headers);
+
+        ValueTask<object> WriteAsync(ArraySegment<byte> buffer, bool endOfStream = false);
     }
 }

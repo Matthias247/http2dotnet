@@ -34,14 +34,17 @@ namespace Http2
         private AsyncManualResetEvent recvPossible = new AsyncManualResetEvent(false);
 
         private bool headersSent = false;
+        private bool dataSent = false;
+
         private bool headersReceived = false;
+        private bool trailersReceived = false;
         private List<HeaderField> inHeaders = new List<HeaderField>();
-        private List<HeaderField> outHeaders = new List<HeaderField>();
         private List<HeaderField> inTrailers = new List<HeaderField>();
-        private List<HeaderField> outTrailers = new List<HeaderField>();
 
         private int receiveWindow; // Might be superficial since that info is also in RingBuf size
         private RingBuf recvBuf;
+
+        private static readonly byte[] nullBuffer = new byte[0];
 
         public StreamImpl(
             Connection connection, uint id, StreamState state,
@@ -54,78 +57,149 @@ namespace Http2
             this.recvBuf = new RingBuf(recvBufSize);
         }
 
-        /// <summary>
-        /// Adds a header that should be sent for the outgoing stream
-        /// </summary>
-        public void AddHeader(HeaderField header)
+        private async ValueTask<object> SendHeaders(
+            IEnumerable<HeaderField> headers, bool endOfStream)
         {
-            lock (stateMutex)
+            var fhh = new FrameHeader {
+                StreamId = this.Id,
+                Type = FrameType.Headers,
+                // EndOfHeaders will be auto-set
+                Flags = endOfStream ? (byte)HeadersFrameFlags.EndOfStream : (byte)0,
+            };
+            var res = await connection.Writer.WriteHeaders(fhh, headers);
+            if (res != ConnectionWriter.WriteResult.Success)
             {
-                if (this.headersSent) return; // TODO: Maybe throw?
-                this.outHeaders.Add(header);
+                throw new Exception("Can not write to stream"); // TODO: Improve me
             }
+            return null;
         }
 
-        /// <summary>
-        /// Adds headers that should be sent for the outgoing stream
-        /// </summary>
-        public void AddHeaders(IEnumerable<HeaderField> headers)
+        public async ValueTask<object> WriteHeaders(IEnumerable<HeaderField> headers, bool endOfStream)
         {
-            lock (stateMutex)
+            HeaderValidationResult hvr;
+            // TODO: For push promises other validates might need to be used
+            if (connection.IsServer) hvr = HeaderValidator.ValidateResponseHeaders(headers);
+            else hvr = HeaderValidator.ValidateRequestHeaders(headers);
+            if (hvr != HeaderValidationResult.Ok)
             {
-                if (this.headersSent) return; // TODO: Maybe throw?
-                this.outHeaders.AddRange(headers);
+                throw new Exception(hvr.ToString());
             }
-        }
 
-        /// <summary>
-        /// Adds a trailer that should be sent for the outgoing stream
-        /// </summary>
-        public void AddTrailer(HeaderField header)
-        {
-            lock (stateMutex)
-            {
-                this.outTrailers.Add(header);
-            }
-        }
+            var removeStream = false;
 
-        /// <summary>
-        /// Adds trailers that should be sent for the outgoing stream
-        /// </summary>
-        public void AddTrailers(IEnumerable<HeaderField> headers)
-        {
-            lock (stateMutex)
-            {
-                this.outTrailers.AddRange(headers);
-            }
-        }
-
-        public async ValueTask<object> FlushHeaders()
-        {
             await writeMutex.WaitAsync();
             try
             {
-                // Check if headers have already been sent
+                // Check what already has been sent
                 lock (stateMutex)
                 {
-                    if (this.headersSent) return null;
+                    // TODO: Check here the state also?
+                    // If we are in a Reset state we might otherwise still try
+                    // to send headers
+                    // TODO: If we put endofstream we might move into other states
+                    if (dataSent)
+                    {
+                        throw new Exception("Attempted to write headers after data");
+                    }
+
+                    if (this.headersSent)
+                    {
+                        // TODO: Allow for multiple header packets or not?
+                        // It seems it is required for informal headers to work
+                    }
+
                     headersSent = true;
                     switch (state)
                     {
                         case StreamState.Idle:
                             state = StreamState.Open;
+                            if (endOfStream)
+                            {
+                                state = StreamState.HalfClosedLocal;
+                            }
                             break;
                         case StreamState.ReservedLocal:
                             state = StreamState.HalfClosedRemote;
+                            if (endOfStream)
+                            {
+                                state = StreamState.Closed;
+                                removeStream = true;
+                            }
                             break;
                     }
                 }
 
-                // TODO: Send headers here
+                await SendHeaders(headers, endOfStream);
             }
             finally
             {
                 writeMutex.Release();
+                if (removeStream)
+                {
+                    connection.RemoveStream(this);
+                }
+            }
+
+            return null;
+        }
+
+        public async ValueTask<object> WriteTrailers(IEnumerable<HeaderField> headers)
+        {
+            HeaderValidationResult hvr = HeaderValidator.ValidateTrailingHeaders(headers);
+            // TODO: For push promises other validates might need to be used
+            if (hvr != HeaderValidationResult.Ok)
+            {
+                throw new Exception(hvr.ToString());
+            }
+
+            var removeStream = false;
+
+            await writeMutex.WaitAsync();
+            try
+            {
+                // Check what already has been sent
+                lock (stateMutex)
+                {
+                    // TODO: Check here the state also?
+                    // If we are in a Reset state we might otherwise still try
+                    // to send headers
+                    // TODO: If we put endofstream we might move into other states
+                    if (!dataSent)
+                    {
+                        throw new Exception("Attempted to write trailers without data");
+                    }
+
+                    switch (state)
+                    {
+                        case StreamState.Open:
+                            state = StreamState.HalfClosedLocal;
+                            break;
+                        case StreamState.HalfClosedRemote:
+                            state = StreamState.HalfClosedRemote;
+                            state = StreamState.Closed;
+                            removeStream = true;
+                            break;
+                        case StreamState.Idle:
+                        case StreamState.ReservedRemote:
+                        case StreamState.HalfClosedLocal:
+                        case StreamState.Reset:
+                        case StreamState.Closed:
+                            throw new Exception("Invalid state for sending trailers");
+                        case StreamState.ReservedLocal:
+                            // We can't be in here if we already have data sent
+                            throw new Exception("Unexpected state: ReservedLocal after data sent");
+                    }
+                }
+
+                await SendHeaders(headers, true);
+            }
+            finally
+            {
+                writeMutex.Release();
+                if (removeStream)
+                {
+                    connection.RemoveStream(this);
+                }
             }
 
             return null;
@@ -136,19 +210,47 @@ namespace Http2
             this.recvPossible.Set();
         }
 
-        public async ValueTask<object> Reset()
+        public ValueTask<object> Reset()
         {
             lock (stateMutex)
             {
-                if (state == StreamState.Reset) return null; // Already reset
-                else if (state == StreamState.Closed) return null; // No need to reset closed streams
+                // TODO: If we were IDLE it probably means that the remote doesn't even know
+                // of us. And we don't need to send reset.
+
+                if (state == StreamState.Reset)
+                {
+                    // Already reset
+                    return new ValueTask<object>(null);
+                }
+                else if (state == StreamState.Closed)
+                {
+                    // No need to reset closed streams
+                    return new ValueTask<object>(null);
+                }
                 state = StreamState.Reset;
             }
 
-            // TODO: Send a reset frame here. Might use ErrorCode.Cancel for this
+            // TODO: Send a reset frame. Might use ErrorCode.Cancel for this
+            var fh = new FrameHeader {
+                StreamId = this.Id,
+                Type = FrameType.ResetStream,
+                Flags = 0,
+            };
+
+            var resetData = new ResetFrameData{ ErrorCode = ErrorCode.Cancel };
+            var writeResetTask = connection.Writer.WriteResetStream(fh, resetData);
+            // We don't really need to care about this task.
+            // If it fails the stream will be reset anyway internally.
+            // And failing most likely occured because of a dead connection.
+            // The only helpful thing could be attaching a continuation for
+            // logging
+
             // TODO: Unregister from the connection
+            this.connection.UnregisterStream(this);
+
+            // Unblock a waiting reader
             WakeupWaiters();
-            return null;
+            return new ValueTask<object>(null);
         }
 
         public async ValueTask<StreamReadResult> ReadAsync(ArraySegment<byte> buffer)
@@ -251,22 +353,74 @@ namespace Http2
             return null;
         }
 
-        public async ValueTask<object> WriteAsync(ArraySegment<byte> buffer)
+        public ValueTask<object> WriteAsync(ArraySegment<byte> buffer)
         {
+            return WriteAsync(buffer, false);
+        }
+
+        public async ValueTask<object> WriteAsync(ArraySegment<byte> buffer, bool endOfStream = false)
+        {
+            var removeStream = false;
+
             await writeMutex.WaitAsync();
             try
             {
+                bool canWrite = false;
+
                 lock (stateMutex)
                 {
+                    canWrite = state == StreamState.Open || state == StreamState.HalfClosedRemote;
+                    if (state == StreamState.Open && endOfStream)
+                    {
+                        state = StreamState.HalfClosedLocal;
+                    }
+                    else if (state == StreamState.HalfClosedRemote && endOfStream)
+                    {
+                        state = StreamState.Closed;
+                        removeStream = true;
+                    }
                     // TODO: Send data depending on the stream state
                     // If we have not sent headers before we also need to do that
+                    if (!this.headersSent)
+                    {
+                        throw new Exception("Attempted to write data before headers");
+                    }
+                    // Remark: There's no need to check whether trailers have already
+                    // been sent as writing trailers will (half)close the stream,
+                    // which is checked for
+
+                    dataSent = true; // Set a flag do disallow following headers
                 }
+
+                // Remark:
+                // As we hold the writeMutex nobody can close the stream or send trailers
+                // in between.
+                // The only thing that may happen is that the stream get's reset in between,
+                // which would be reported through the ConnectionWriter to us
+                if (!canWrite) throw new Exception("Stream is not writeable"); // TODO: Make better
+
+                var fh = new FrameHeader {
+                    StreamId = this.Id,
+                    Type = FrameType.Data,
+                    Flags = endOfStream ? ((byte)DataFrameFlags.EndOfStream) : (byte)0,
+                };
+
+                var res = await connection.Writer.WriteData(fh, buffer);
+                if (res != ConnectionWriter.WriteResult.Success)
+                {
+                    throw new Exception("Can not write to stream"); // TODO: Improve me
+                }
+
+                return null;
             }
             finally
             {
                 writeMutex.Release();
+                if (removeStream)
+                {
+                    this.connection._removeStream(this.Id);
+                }
             }
-            return null;
         }
 
         public async ValueTask<object> CloseAsync()
@@ -292,16 +446,21 @@ namespace Http2
                         case StreamState.Open:
                             state = StreamState.HalfClosedLocal;
                             sendClose = true;
+                            dataSent = true;
+                            // TODO: Open can mean we have sent the headers or not
+                            // We also may need to send trailers or not
                             break;
                         case StreamState.HalfClosedRemote:
                             state = StreamState.Closed;
                             sendClose = true;
+                            dataSent = true;
                             removeStream = true;
                             break;
                         case StreamState.HalfClosedLocal:
                         case StreamState.Closed:
                         case StreamState.Reset:
                             // Nothing to do in this cases
+                            break;
                         default:
                             throw new Exception("Unhandled stream state");
                     }
@@ -309,11 +468,19 @@ namespace Http2
 
                 if (sendClose)
                 {
-                    this._sendClose();
-                    if (removeStream)
+                    var fh = new FrameHeader {
+                        StreamId = this.Id,
+                        Type = FrameType.Data,
+                        Flags = ((byte)DataFrameFlags.EndOfStream),
+                    };
+
+                    var res = await connection.Writer.WriteData(
+                        fh, new ArraySegment<byte>(nullBuffer));
+                    if (res != ConnectionWriter.WriteResult.Success)
                     {
-                        this.connection._removeStream(this.Id);
+                        throw new Exception("Can not write to stream"); // TODO: Improve me
                     }
+
                     WakeupWaiters();
                     // TODO: We currently only wake up the reader,
                     // which is not affected through a local close.
@@ -323,6 +490,10 @@ namespace Http2
             finally
             {
                 writeMutex.Release();
+                if (removeStream)
+                {
+                    this.connection._removeStream(this.Id);
+                }
             }
 
             return null;
