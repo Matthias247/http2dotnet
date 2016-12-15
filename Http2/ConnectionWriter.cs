@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -29,6 +30,10 @@ namespace Http2
         {
             public uint StreamId;
             public int Window;
+            // TODO: Is the queue needed here?
+            // As the StreamImpl API does not allow
+            // writing concurrent header and data frames
+            // it seems superfluos
             public Queue<WriteRequest> WriteQueue;
             public bool EndOfStreamQueued;
         }
@@ -66,6 +71,11 @@ namespace Http2
             public AsyncManualResetEvent Completed;
             public WriteResult Result;
         }
+
+        private static readonly ArrayPool<byte> _pool = ArrayPool<byte>.Shared;
+
+        private static readonly ArraySegment<byte> EmptyByteArray =
+            new ArraySegment<byte>(new byte[0]);
 
         /// <summary>The associated connection</summary>
         public Connection Connection { get; }
@@ -117,8 +127,7 @@ namespace Http2
             this.options = options;
             this.hEncoder = new Hpack.Encoder(hpackOptions);
             // Create a buffer for outgoing data
-            // TODO: Pooling
-            this.outBuf = new byte[FrameHeader.HeaderSize + options.MaxFrameSize];
+            this.outBuf = _pool.Rent(FrameHeader.HeaderSize + options.MaxFrameSize);
             // Start the task that performs the actual writing
             Task.Run(() => this.RunAsync());
         }
@@ -186,8 +195,12 @@ namespace Http2
                 lock (mutex)
                 {
                     closed = true;
+                    // Fail pending writes that are still queued up
+                    // TODO: Is that safe inside the lock?
+                    FinishAllOutstandingWritesLocked();
                 }
-                // TODO: Fail pending writes that are still queued up
+                _pool.Return(this.outBuf);
+                this.outBuf = null;
                 doneTcs.SetResult(true);
             }
         }
@@ -232,6 +245,10 @@ namespace Http2
                         s.WriteQueue.Dequeue();
                         var we = AllocateWriteRequest();
                         we.Header = first.Header;
+                        // Reset a potential EndOfStream flag
+                        // The part that we can't send now might be the end of
+                        // the stream. This isn't it.
+                        we.Header.Flags = 0;
                         we.Data = new ArraySegment<byte>(
                             first.Data.Array, first.Data.Offset, availableFlow);
                         // Adjust the amount of bytes that have to be written later on
@@ -250,8 +267,14 @@ namespace Http2
                 if (first.Header.Type == FrameType.ResetStream || first.Header.HasEndOfStreamFlag)
                 {
                     Streams.RemoveAt(i-1);
-                    // TODO: Still need to make sure that the queue inside this stream
-                    // does not contain anything after the written element
+                    // Make sure that the queue inside this stream
+                    // does not contain anything after the written element.
+                    // This would be a contract violation and StreamImpl should be checked.
+                    if (s.WriteQueue.Count > 0)
+                    {
+                        throw new Exception(
+                            "Unexpected: WriteQueue for stream contains data after EndOfStream");
+                    }
                 }
                 return first;
             }
@@ -259,7 +282,8 @@ namespace Http2
             return null;
         }
 
-        private async ValueTask<object> ProcessWriteRequestAsync(WriteRequest wr, int maxFrameSize)
+        private async ValueTask<object> ProcessWriteRequestAsync(
+            WriteRequest wr, int maxFrameSize)
         {
             // TODO: In general we SHOULD check whether the data payload exceeds the
             // maximum frame size. It is just copied at the moment
@@ -270,33 +294,33 @@ namespace Http2
                 switch (wr.Header.Type)
                 {
                     case FrameType.Headers:
-                        await WriteHeaders(wr, maxFrameSize);
+                        await WriteHeadersAsync(wr, maxFrameSize);
                         break;
                     case FrameType.PushPromise:
-                        await WritePushPromise(wr);
+                        await WritePushPromiseAsync(wr);
                         break;
                     case FrameType.Data:
-                        await WriteDataFrame(wr);
+                        await WriteDataFrameAsync(wr);
                         break;
                     case FrameType.GoAway:
-                        await WriteGoAwayFrame(wr);
+                        await WriteGoAwayFrameAsync(wr);
                         break;
                     case FrameType.Continuation:
                         throw new Exception("Continuations might not be directly queued");
                     case FrameType.Ping:
-                        await WritePingFrame(wr);
+                        await WritePingFrameAsync(wr);
                         break;
                     case FrameType.Priority:
-                        await WritePriorityFrame(wr);
+                        await WritePriorityFrameAsync(wr);
                         break;
                     case FrameType.ResetStream:
-                        await WriteResetFrame(wr);
+                        await WriteResetFrameAsync(wr);
                         break;
                     case FrameType.WindowUpdate:
                         await WriteWindowUpdateFrame(wr);
                         break;
                     case FrameType.Settings:
-                        await WriteSettingsFrame(wr);
+                        await WriteSettingsFrameAsync(wr);
                         break;
                     default:
                         throw new Exception("Unknown frame type");
@@ -350,6 +374,8 @@ namespace Http2
 
         private bool TryEnqueueWriteRequest(uint streamId, WriteRequest wr)
         {
+            // Put frames for the connection(streamId 0)
+            // as well as reset and window update frames in the main outgoing queue
             if (streamId == 0 ||
                 wr.Header.Type == FrameType.WindowUpdate ||
                 wr.Header.Type == FrameType.ResetStream)
@@ -392,23 +418,38 @@ namespace Http2
             return false;
         }
 
+        /// <summary>
+        /// Allocates a new WriteRequest structure.
+        /// This could be delegated to a connection-local
+        /// or global pool in future.
+        /// </summary>
+        /// <returns></returns>
         private WriteRequest AllocateWriteRequest()
         {
-            var wr = new WriteRequest();
+            var wr = new WriteRequest()
+            {
+                Completed = new AsyncManualResetEvent(false),
+            };
             return wr;
         }
 
+        /// <summary>
+        /// Releases a WriteRequest structure.
+        /// After releasing it it may be reused for another write.
+        /// </summary>
+        /// <param name="wr">The WriteRequest to release</param>
         private void ReleaseWriteRequest(WriteRequest wr)
         {
             wr.Result = WriteResult.InProgress;
             wr.Headers = null;
-            // TODO: Might leak memory inside the data
-            // and goaway frames if we use a real pool allocator
-            // for this
+            // Reset all contained byte arrays so that we leak no
+            // data if a pool allocator is used.
+            wr.Data = EmptyByteArray;
+            wr.GoAwayData.DebugData = EmptyByteArray;
             wr.Completed.Reset();
         }
 
-        private async ValueTask<WriteResult> PerformWriteRequest(
+        private async ValueTask<WriteResult> PerformWriteRequestAsync(
             uint streamId, Action<WriteRequest> populateRequest)
         {
             WriteRequest wr = null;
@@ -443,7 +484,8 @@ namespace Http2
 
             if (result == WriteResult.InProgress)
             {
-                throw new Exception("Unexpected: Write is still marked as in progress");
+                throw new Exception(
+                    "Unexpected: Write is still marked as in progress");
             }
 
             return result;
@@ -452,7 +494,7 @@ namespace Http2
         public ValueTask<WriteResult> WriteHeaders(
             FrameHeader header, IEnumerable<HeaderField> headers)
         {
-            return PerformWriteRequest(
+            return PerformWriteRequestAsync(
                 header.StreamId,
                 wr => {
                     wr.Header = header;
@@ -463,7 +505,7 @@ namespace Http2
         public ValueTask<WriteResult> WriteSettings(
             FrameHeader header, ArraySegment<byte> data)
         {
-            return PerformWriteRequest(
+            return PerformWriteRequestAsync(
                 0,
                 wr => {
                     wr.Header = header;
@@ -474,7 +516,7 @@ namespace Http2
         public ValueTask<WriteResult> WriteResetStream(
             FrameHeader header, ResetFrameData data)
         {
-            return PerformWriteRequest(
+            return PerformWriteRequestAsync(
                 header.StreamId,
                 wr => {
                     wr.Header = header;
@@ -485,7 +527,7 @@ namespace Http2
         public ValueTask<WriteResult> WritePing(
             FrameHeader header, ArraySegment<byte> data)
         {
-            return PerformWriteRequest(
+            return PerformWriteRequestAsync(
                 0,
                 wr => {
                     wr.Header = header;
@@ -496,7 +538,7 @@ namespace Http2
         public ValueTask<WriteResult> WriteWindowUpdate(
             FrameHeader header, WindowUpdateData data)
         {
-            return PerformWriteRequest(
+            return PerformWriteRequestAsync(
                 header.StreamId,
                 wr => {
                     wr.Header = header;
@@ -507,7 +549,7 @@ namespace Http2
         public ValueTask<WriteResult> WriteGoAway(
             FrameHeader header, GoAwayFrameData data)
         {
-            return PerformWriteRequest(
+            return PerformWriteRequestAsync(
                 0,
                 wr => {
                     wr.Header = header;
@@ -518,7 +560,7 @@ namespace Http2
         public ValueTask<WriteResult> WriteData(
             FrameHeader header, ArraySegment<byte> data)
         {
-            return PerformWriteRequest(
+            return PerformWriteRequestAsync(
                 header.StreamId,
                 wr => {
                     wr.Header = header;
@@ -530,7 +572,7 @@ namespace Http2
         /// Writes a DATA frame.
         /// This will not utilize the padding feature currently
         /// </summary>
-        private async ValueTask<object> WriteDataFrame(WriteRequest wr)
+        private async ValueTask<object> WriteDataFrameAsync(WriteRequest wr)
         {
             // TODO: Check whether padding flag is set and either throw, reset it or handle it
             wr.Header.Length = wr.Data.Count;
@@ -546,7 +588,7 @@ namespace Http2
         /// <summary>
         /// Writes a PING frame
         /// </summary>
-        private ValueTask<object> WritePingFrame(WriteRequest wr)
+        private ValueTask<object> WritePingFrameAsync(WriteRequest wr)
         {
             wr.Header.Length = 8;
             var headerView = new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize);
@@ -562,7 +604,7 @@ namespace Http2
         /// <summary>
         /// Writes a GoAway frame
         /// </summary>
-        private ValueTask<object> WriteGoAwayFrame(WriteRequest wr)
+        private ValueTask<object> WriteGoAwayFrameAsync(WriteRequest wr)
         {
             var dataSize = wr.GoAwayData.RequiredSize;
             wr.Header.Length = dataSize;
@@ -578,7 +620,7 @@ namespace Http2
         /// <summary>
         /// Writes a RESET frame
         /// </summary>
-        private ValueTask<object> WriteResetFrame(WriteRequest wr)
+        private ValueTask<object> WriteResetFrameAsync(WriteRequest wr)
         {
             wr.Header.Length = ResetFrameData.Size;
             // Serialize the frame header into the outgoing buffer
@@ -594,7 +636,7 @@ namespace Http2
         /// <summary>
         /// Writes a SETTINGS frame
         /// </summary>
-        private ValueTask<object> WriteSettingsFrame(WriteRequest wr)
+        private ValueTask<object> WriteSettingsFrameAsync(WriteRequest wr)
         {
             wr.Header.Length = wr.Data.Count;
             var headerView = new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize);
@@ -608,11 +650,13 @@ namespace Http2
         }
 
         /// <summary>
-        /// Writes HeaderSize.
-        /// This will actually write a headers frame and possibly multiple continuation frames.
+        /// Writes a full header block.
+        /// This will actually write a headers frame and possibly
+        /// multiple continuation frames.
         /// This will not utilize the padding feature currently
         /// </summary>
-        private async ValueTask<object> WriteHeaders(WriteRequest wr, int maxFrameSize)
+        private async ValueTask<object> WriteHeadersAsync(
+            WriteRequest wr, int maxFrameSize)
         {
             var headerView = new ArraySegment<byte>(
                 outBuf, 0, FrameHeader.HeaderSize);
@@ -656,7 +700,10 @@ namespace Http2
                 {
                     hdr.Type = FrameType.Continuation;
                     hdr.Flags = 0;
-                    if (remaining == 0) hdr.Flags = (byte)ContinuationFrameFlags.EndOfHeaders;
+                    if (remaining == 0)
+                    {
+                        hdr.Flags = (byte)ContinuationFrameFlags.EndOfHeaders;
+                    }
                 }
 
                 // Serialize the frame header and write it together with the header block
@@ -681,12 +728,12 @@ namespace Http2
             return null;
         }
 
-        private ValueTask<object> WritePushPromise(WriteRequest wr)
+        private ValueTask<object> WritePushPromiseAsync(WriteRequest wr)
         {
             throw new NotSupportedException("Push promises are not supported");
         }
 
-        private ValueTask<object> WritePriorityFrame(WriteRequest wr)
+        private ValueTask<object> WritePriorityFrameAsync(WriteRequest wr)
         {
             throw new NotSupportedException("Priority is not supported");
         }
@@ -695,7 +742,11 @@ namespace Http2
         /// Registers a new stream for which frames must be transmitted at the
         /// writer.
         /// </summary>
-        public async Task<bool> RegisterStream(uint streamId, int flowWindow)
+        /// <returns>
+        /// True if the stream could be succesfully regiestered.
+        /// False otherwise.
+        /// </returns>
+        public bool RegisterStream(uint streamId, int flowWindow)
         {
             lock (mutex)
             {
@@ -719,7 +770,7 @@ namespace Http2
         }
 
         /// <summary>
-        /// Removes the stream with the given stream ID fromt he writer.
+        /// Removes the stream with the given stream ID from the writer.
         /// Pending writes will be canceled.
         /// This does not cancel any pending WindowUpdate or ResetStream writes
         /// </summary>
@@ -745,12 +796,35 @@ namespace Http2
                 }
             }
 
-            // Signal the writes as finished with an ResetError
+            // Signal all queued up writes as finished with an ResetError
             foreach (var elem in writeQueue)
             {
                 elem.Result = WriteResult.StreamResetError;
                 elem.Completed.Set();
             }
+        }
+
+        private void FinishAllOutstandingWritesLocked()
+        {
+            var streamsMap = this.Streams;
+            foreach (var stream in Streams)
+            {
+                // Signal all queued up writes as finished with an ResetError
+                foreach (var elem in stream.WriteQueue)
+                {
+                    elem.Result = WriteResult.StreamResetError;
+                    elem.Completed.Set();
+                }
+                stream.WriteQueue.Clear();
+            }
+            streamsMap.Clear();
+
+            foreach (var elem in WriteQueue)
+            {
+                elem.Result = WriteResult.StreamResetError;
+                elem.Completed.Set();
+            }
+            WriteQueue.Clear();
         }
 
         /// <summary>
@@ -769,7 +843,7 @@ namespace Http2
         /// <summary>
         /// Updates the maximum header table size
         /// </summary>
-        public async Task UpdateMaximumHeaderTableSize(int newMaxHeaderTableSize)
+        public void UpdateMaximumHeaderTableSize(int newMaxHeaderTableSize)
         {
             lock (mutex)
             {
@@ -790,17 +864,51 @@ namespace Http2
         /// <summary>
         /// Updates the flow control window of the given stream by amount.
         /// If the streamId is 0 the window of the connection will be increased.
-        /// Amount must be a positive number
+        /// Amount must be a positive number greater than 0.
         /// </summary>
-        public void UpdateFlowControlWindow(int streamId, int amount)
+        /// <returns>
+        /// Returns true if the flow control window for the stream could be updated
+        /// or if the stream does not exist.
+        /// Returns false in cases where an overflow error for the flow control
+        /// window occurs.
+        /// </returns>
+        public Http2Error? UpdateFlowControlWindow(int streamId, int amount)
         {
             var wakeup = false;
+
+            // Negative or zero flow control window updates are not valid
+            if (amount < 1)
+            {
+                var errType = streamId == 0
+                    ? ErrorType.ConnectionError
+                    : ErrorType.StreamError;
+
+                return new Http2Error
+                {
+                    Code = ErrorCode.ProtocolError,
+                    Type = errType,
+                    Message = "Received an invalid flow control window update",
+                };
+            }
+
             lock (mutex)
             {
                 if (streamId == 0)
                 {
                     if (connFlowWindow == 0) wakeup = true;
-                    connFlowWindow += amount; // TODO: Check for overflow
+                    // Check for overflow
+                    var maxIncrease = int.MaxValue - connFlowWindow;
+                    if (amount > maxIncrease)
+                    {
+                        return new Http2Error
+                        {
+                            Code = ErrorCode.FlowControlError,
+                            Type = ErrorType.ConnectionError,
+                            Message = "Flow control window overflow",
+                        };
+                    }
+                    // Increase connection flow control value
+                    connFlowWindow += amount;
                 }
                 else
                 {
@@ -810,7 +918,19 @@ namespace Http2
                         {
                             var s = Streams[i];
                             if (s.Window == 0 && s.WriteQueue.Count > 0) wakeup = true;
-                            s.Window += amount; // TODO: Check for overflow
+                            // Check for overflow
+                            var maxIncrease = int.MaxValue - s.Window;
+                            if (amount > maxIncrease)
+                            {
+                                return new Http2Error
+                                {
+                                    Code = ErrorCode.FlowControlError,
+                                    Type = ErrorType.StreamError,
+                                    Message = "Flow control window overflow",
+                                };
+                            }
+                            // Increase stream flow control value
+                            s.Window += amount;
                             Streams[i] = s;
                             break;
                         }
@@ -822,6 +942,7 @@ namespace Http2
             {
                 this.wakeupWriter.Set();
             }
+            return null;
         }
     }
 }

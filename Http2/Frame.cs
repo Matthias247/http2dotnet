@@ -321,6 +321,25 @@ namespace Http2
             b[o+2] = (byte)((WindowSizeIncrement >> 8) & 0xFF);
             b[o+3] = (byte)((WindowSizeIncrement) & 0xFF);
         }
+
+        /// <summary>
+        /// Encodes the window update data into the given byte array
+        /// This must be at least 4 bytes long
+        /// </summary>
+        public static WindowUpdateData DecodeFrom(ArraySegment<byte> bytes)
+        {
+            var b = bytes.Array;
+            var o = bytes.Offset;
+
+            var increment =
+                (b[o + 0] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o+3];
+
+            // TODO: Check for negative window updates somewhere
+            return new WindowUpdateData
+            {
+                WindowSizeIncrement = increment,
+            };
+        }
     }
 
     /// <summary>

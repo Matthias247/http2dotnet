@@ -30,7 +30,7 @@ namespace Http2
         InternalError = 0x2,
         FlowControlError = 0x3,
         SettingsTimeout = 0x4,
-        Streamclosed = 0x5,
+        StreamClosed = 0x5,
         FrameSizeError = 0x6,
         RefusedStream = 0x7,
         Cancel = 0x8,
@@ -85,7 +85,7 @@ namespace Http2
                 "a response in a timely manner"
             },
             {
-                ErrorCode.Streamclosed,
+                ErrorCode.StreamClosed,
                 "The endpoint received a frame after a stream was half-closed"
             },
             {

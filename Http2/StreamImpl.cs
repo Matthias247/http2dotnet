@@ -30,7 +30,9 @@ namespace Http2
         private Connection connection;
         private StreamState state;
         private object stateMutex = new object();
+        /// <summary>Allows only a single write at a time</summary>
         private SemaphoreSlim writeMutex = new SemaphoreSlim(1);
+        /// <summary>Unblocks pending read operations</summary>
         private AsyncManualResetEvent recvPossible = new AsyncManualResetEvent(false);
 
         private bool headersSent = false;
@@ -38,21 +40,34 @@ namespace Http2
 
         private bool headersReceived = false;
         private bool trailersReceived = false;
-        private List<HeaderField> inHeaders = new List<HeaderField>();
-        private List<HeaderField> inTrailers = new List<HeaderField>();
+        private List<HeaderField> inHeaders;
+        private List<HeaderField> inTrailers;
 
         private int receiveWindow; // Might be superficial since that info is also in RingBuf size
         private RingBuf recvBuf;
 
-        private static readonly byte[] nullBuffer = new byte[0];
+        private static readonly ArraySegment<byte> EmptyBuffer =
+            new ArraySegment<byte>(new byte[0]);
 
         public StreamImpl(
-            Connection connection, uint id, StreamState state,
-            int recvBufSize, int receiveWindow)
+            Connection connection,
+            uint streamId,
+            StreamState state,
+            List<HeaderField> receivedHeaders,
+            int recvBufSize,
+            int receiveWindow)
         {
             this.connection = connection;
-            this.Id = id;
+            this.Id = streamId;
+
+            // In case we are on the server side and the client opens a stream
+            // the expected state is Open and we get headers.
+            // TODO: Or are we only Idle and get headers soon after that?
+            // In case we are on the client side we are idle and need
+            // to send headers before doing anything.
             this.state = state;
+            this.inHeaders = receivedHeaders;
+            if (receivedHeaders != null) headersReceived = true;
             this.receiveWindow = receiveWindow;
             this.recvBuf = new RingBuf(recvBufSize);
         }
@@ -69,7 +84,8 @@ namespace Http2
             var res = await connection.Writer.WriteHeaders(fhh, headers);
             if (res != ConnectionWriter.WriteResult.Success)
             {
-                throw new Exception("Can not write to stream"); // TODO: Improve me
+                // TODO: Improve the exception
+                throw new Exception("Can not write to stream");
             }
             return null;
         }
@@ -102,10 +118,10 @@ namespace Http2
                         throw new Exception("Attempted to write headers after data");
                     }
 
-                    if (this.headersSent)
+                    if (headersSent)
                     {
                         // TODO: Allow for multiple header packets or not?
-                        // It seems it is required for informal headers to work
+                        // It seems it is required for informational headers to work
                     }
 
                     headersSent = true;
@@ -136,7 +152,7 @@ namespace Http2
                 writeMutex.Release();
                 if (removeStream)
                 {
-                    connection.RemoveStream(this);
+                    connection.UnregisterStream(this);
                 }
             }
 
@@ -198,7 +214,7 @@ namespace Http2
                 writeMutex.Release();
                 if (removeStream)
                 {
-                    connection.RemoveStream(this);
+                    connection.UnregisterStream(this);
                 }
             }
 
@@ -210,34 +226,37 @@ namespace Http2
             this.recvPossible.Set();
         }
 
-        public ValueTask<object> Reset()
+        public void Cancel()
+        {
+            Reset(ErrorCode.Cancel);
+        }
+
+        internal void Reset(ErrorCode errorCode)
         {
             lock (stateMutex)
             {
                 // TODO: If we were IDLE it probably means that the remote doesn't even know
                 // of us. And we don't need to send reset.
 
-                if (state == StreamState.Reset)
+                if (state == StreamState.Reset || state == StreamState.Closed)
                 {
-                    // Already reset
-                    return new ValueTask<object>(null);
-                }
-                else if (state == StreamState.Closed)
-                {
-                    // No need to reset closed streams
-                    return new ValueTask<object>(null);
+                    // Already reset or fully closed
+                    return;
                 }
                 state = StreamState.Reset;
             }
 
-            // TODO: Send a reset frame. Might use ErrorCode.Cancel for this
-            var fh = new FrameHeader {
+            // Send a reset frame with the given error code
+            var fh = new FrameHeader
+            {
                 StreamId = this.Id,
                 Type = FrameType.ResetStream,
                 Flags = 0,
             };
-
-            var resetData = new ResetFrameData{ ErrorCode = ErrorCode.Cancel };
+            var resetData = new ResetFrameData
+            {
+                ErrorCode = errorCode
+            };
             var writeResetTask = connection.Writer.WriteResetStream(fh, resetData);
             // We don't really need to care about this task.
             // If it fails the stream will be reset anyway internally.
@@ -245,12 +264,11 @@ namespace Http2
             // The only helpful thing could be attaching a continuation for
             // logging
 
-            // TODO: Unregister from the connection
+            // Unregister from the connection
             this.connection.UnregisterStream(this);
 
             // Unblock a waiting reader
             WakeupWaiters();
-            return new ValueTask<object>(null);
         }
 
         public async ValueTask<StreamReadResult> ReadAsync(ArraySegment<byte> buffer)
@@ -418,7 +436,7 @@ namespace Http2
                 writeMutex.Release();
                 if (removeStream)
                 {
-                    this.connection._removeStream(this.Id);
+                    connection.UnregisterStream(this);
                 }
             }
         }
@@ -474,11 +492,11 @@ namespace Http2
                         Flags = ((byte)DataFrameFlags.EndOfStream),
                     };
 
-                    var res = await connection.Writer.WriteData(
-                        fh, new ArraySegment<byte>(nullBuffer));
+                    var res = await connection.Writer.WriteData(fh, EmptyBuffer);
                     if (res != ConnectionWriter.WriteResult.Success)
                     {
-                        throw new Exception("Can not write to stream"); // TODO: Improve me
+                        // TODO: Throw a better typed exception
+                        throw new Exception("Can not write to stream");
                     }
 
                     WakeupWaiters();
@@ -492,10 +510,100 @@ namespace Http2
                 writeMutex.Release();
                 if (removeStream)
                 {
-                    this.connection._removeStream(this.Id);
+                    connection.UnregisterStream(this);
                 }
             }
 
+            return null;
+        }
+
+        public Http2Error? ProcessHeaders(
+            List<HeaderField> headers,
+            bool endOfStream)
+        {
+            lock (stateMutex)
+            {
+                // Header frames are not valid in all states
+                switch (state)
+                {
+                    case StreamState.Idle:
+                        // Received the first header frame
+                        // This moves the stream into the Open state
+                        state = StreamState.Open;
+                        if (endOfStream) state = StreamState.HalfClosedRemote;
+                        headersReceived = true;
+                        // TODO: Wakeup the reader?
+                        break;
+                    case StreamState.ReservedLocal:
+                    case StreamState.ReservedRemote:
+                        // Push promises are currently not implemented
+                        // So this needs to be reviewed later on
+                        throw new NotImplementedException();
+                    case StreamState.Open:
+                    case StreamState.HalfClosedLocal:
+                        // Open can mean we have already received headers
+                        // (in case we are a server) or not (in case we are
+                        // a client and only have sent headers)
+                        // If headers were already before there must be a
+                        // data frame in between and these are trailers.
+                        // An exception is if we are client, where we can
+                        // receive informational headers and normal headers.
+                        // This required no data in between. And that the
+                        // received headers contain a 1xy status code
+                        // Trailers must have EndOfStream set.
+                        if (connection.IsServer)
+                        {
+                            // TODO: On Server side we can't be in half-closed here
+                            // Is this a problem?
+                            // Actually on server side we may only receive trailers here
+                            // headers are received in State Idle
+
+                        }
+                        else
+                        {
+
+                        }
+                        if (headersReceived)
+                        {
+
+                        }
+                        if (endOfStream)
+                        {
+                            if (state == StreamState.Open)
+                            {
+                                state = StreamState.HalfClosedRemote;
+                            }
+                            else // HalfClosedLocal
+                            {
+                                state = StreamState.Closed;
+                                // TODO: The stream must be removed from the connection
+                            }
+                        }
+                        // TODO: Wakeup the reader?
+                        break;
+                    case StreamState.HalfClosedRemote:
+                    case StreamState.Closed:
+                        // Received a header frame for a stream that was
+                        // already closed from remote side.
+                        // That's not valid
+                        return new Http2Error
+                        {
+                            Code = ErrorCode.StreamClosed,
+                            Type = ErrorType.StreamError,
+                            Message = "Received headers for closed stream",
+                        };
+                    case StreamState.Reset:
+                        // The stream was already reset
+                        // What we really should do here depends on the previous state,
+                        // which is not stored for efficiency.
+                        // But most likely the incoming data is just late and the remote
+                        // has not received our Reset.
+                        // We just ignore the incoming frame.
+                        break;
+                    default:
+                        throw new Exception("Unhandled stream state");
+                }
+            }
             return null;
         }
     }

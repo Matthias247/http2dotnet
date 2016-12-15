@@ -55,5 +55,19 @@ namespace Http2
         /// a HTTP/2 connection. True for servers.
         /// </summary>
         public readonly bool IsServer;
+
+
+        /// <summary>
+        /// Unregisters a stream from the map of streams that are managed
+        /// by this connection.
+        /// </summary>
+        /// <param name="stream">
+        /// The stream to unregister
+        /// </param>
+        internal void UnregisterStream(StreamImpl stream)
+        {
+            // TODO: Implement me
+            throw new NotImplementedException();
+        }
     }
 }
