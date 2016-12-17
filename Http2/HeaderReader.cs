@@ -136,6 +136,8 @@ namespace Http2
             {
                 var segment = new ArraySegment<byte>(buffer, offset, contentLen);
                 var consumed = hpackDecoder.Decode(segment);
+                offset += consumed;
+                contentLen -= consumed;
                 if (hpackDecoder.Done)
                 {
                     totalHeadersSize += hpackDecoder.HeaderSize;
@@ -155,18 +157,26 @@ namespace Http2
                 }
                 else
                 {
-                    // Need more data but we don't have any :O
-                    // TODO: Check if we also get here in case of
-                    // headerblock buffer size udpates
-                    // In these cases we are not allowed to break early
+                    // This can happen if the last element of the header block
+                    // is a TableUpdate instruction
+                    // TODO: Assert here that contentLen == 0?
                     break;
                 }
-                offset += consumed;
-                contentLen -= consumed;
             }
 
-            // TODO: Might need a flag here on the decoder that indicates
-            // if it is missing data (headerblockfragment is incomplete)
+            // Check if the HeaderBlockFragment has correctly ended
+            if (!hpackDecoder.HasInitialState)
+            {
+                return new Result
+                {
+                    Error = new Http2Error
+                    {
+                        Type = ErrorType.ConnectionError,
+                        Code = ErrorCode.ProtocolError,
+                        Message = "HeaderBlockFragment is incomplete",
+                    },
+                };
+            }
 
             while (!isEndOfHeaders)
             {
@@ -201,6 +211,8 @@ namespace Http2
                 {
                     var segment = new ArraySegment<byte>(buffer, offset, contentLen);
                     var consumed = hpackDecoder.Decode(segment);
+                    offset += consumed;
+                    contentLen -= consumed;
                     if (hpackDecoder.Done)
                     {
                         totalHeadersSize += hpackDecoder.HeaderSize;
@@ -220,18 +232,26 @@ namespace Http2
                     }
                     else
                     {
-                        // Need more data but we don't have any :O
-                        // TODO: Check if we also get here in case of
-                        // headerblock buffer size udpates
-                        // In these cases we are not allowed to break early
+                        // This can happen if the last element of the header block
+                        // is a TableUpdate instruction
+                        // TODO: Assert here that contentLen == 0?
                         break;
                     }
-                    offset += consumed;
-                    contentLen -= consumed;
                 }
 
-                // TODO: Might need a flag here on the decoder that indicates
-                // if it is missing data (headerblockfragment is incomplete)
+                // Check if the HeaderBlockFragment has correctly ended
+                if (!hpackDecoder.HasInitialState)
+                {
+                    return new Result
+                    {
+                        Error = new Http2Error
+                        {
+                            Type = ErrorType.ConnectionError,
+                            Code = ErrorCode.ProtocolError,
+                            Message = "HeaderBlockFragment is incomplete",
+                        },
+                    };
+                }
             }
 
             return new Result

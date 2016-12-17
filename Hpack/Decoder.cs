@@ -61,6 +61,14 @@ namespace Hpack
         /// </summary>
         public bool Done = true;
 
+        /// <summary>
+        /// Returns whether the HPACK decoder is on the initial state, where it
+        /// expects the beginning of a header block fragment.
+        /// If this is not set it means that HPACK decoder is waiting on more
+        /// data in order to process header data.
+        /// </summary>
+        public bool HasInitialState => _curTask == -1;
+
         /// <summary>The result of the decode operation</summary>
         public HeaderField HeaderField;
 

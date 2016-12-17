@@ -54,6 +54,7 @@ namespace HpackTests
             Assert.False(decoder.HeaderField.Sensitive);
             Assert.Equal(42, decoder.HeaderSize);
             Assert.Equal(1, consumed);
+            Assert.True(decoder.HasInitialState);
 
             buf.WriteByte(0x82);
             consumed = decoder.Decode(new ArraySegment<byte>(buf.Bytes, 1, 1));
@@ -63,6 +64,7 @@ namespace HpackTests
             Assert.False(decoder.HeaderField.Sensitive);
             Assert.Equal(42, decoder.HeaderSize);
             Assert.Equal(1, consumed);
+            Assert.True(decoder.HasInitialState);
 
             buf.WriteByte(0xBD);
             consumed = decoder.Decode(new ArraySegment<byte>(buf.Bytes, 2, 1));
@@ -72,6 +74,7 @@ namespace HpackTests
             Assert.False(decoder.HeaderField.Sensitive);
             Assert.Equal(48, decoder.HeaderSize);
             Assert.Equal(1, consumed);
+            Assert.True(decoder.HasInitialState);
         }
 
         [Fact]
@@ -96,14 +99,17 @@ namespace HpackTests
             var consumed = decoder.Decode(buf.View);
             Assert.False(decoder.Done);
             Assert.Equal(1, consumed);
+            Assert.False(decoder.HasInitialState);
             consumed = decoder.Decode(new ArraySegment<byte>(buf.Bytes, 1, 0));
             Assert.False(decoder.Done);
             Assert.Equal(0, consumed);
+            Assert.False(decoder.HasInitialState);
             // Add next byte
             buf.WriteByte(0x0A); // 127 + 10
             consumed = decoder.Decode(new ArraySegment<byte>(buf.Bytes, 1, 1));
             Assert.True(decoder.Done);
             Assert.Equal(1, consumed);
+            Assert.True(decoder.HasInitialState);
 
             var targetIndex = 137 - StaticTable.Length - 1;
             Assert.Equal("key"+targetIndex, decoder.HeaderField.Name);
@@ -163,6 +169,7 @@ namespace HpackTests
             Assert.Equal(5, consumed);
             Assert.Equal(1, decoder.DynamicTableLength);
             Assert.Equal(32+7+3, decoder.DynamicTableUsedSize);
+            Assert.True(decoder.HasInitialState);
         }
 
         [Fact]
@@ -185,6 +192,7 @@ namespace HpackTests
             Assert.Equal(8, consumed);
             Assert.Equal(1, decoder.DynamicTableLength);
             Assert.Equal(32+2+3, decoder.DynamicTableUsedSize);
+            Assert.True(decoder.HasInitialState);
 
             var emptyView = new ArraySegment<byte>(new byte[20], 20, 0);
 
@@ -194,6 +202,7 @@ namespace HpackTests
             consumed = decoder.Decode(buf.View);
             Assert.False(decoder.Done);
             Assert.Equal(1, consumed);
+            Assert.False(decoder.HasInitialState);
             consumed = decoder.Decode(emptyView);
             Assert.False(decoder.Done);
             Assert.Equal(0, consumed);
@@ -248,6 +257,7 @@ namespace HpackTests
             Assert.False(decoder.HeaderField.Sensitive);
             Assert.Equal(37, decoder.HeaderSize);
             Assert.Equal(1, consumed);
+            Assert.True(decoder.HasInitialState);
             Assert.Equal(decoder.DynamicTableLength, 2);
             Assert.Equal(decoder.DynamicTableUsedSize, 32+2+3+32+2+3);
         }
@@ -268,6 +278,7 @@ namespace HpackTests
             Assert.False(decoder.HeaderField.Sensitive);
             Assert.Equal(42, decoder.HeaderSize);
             Assert.Equal(5, consumed);
+            Assert.True(decoder.HasInitialState);
             Assert.Equal(decoder.DynamicTableLength, 0);
             Assert.Equal(decoder.DynamicTableUsedSize, 0);
         }
@@ -290,6 +301,7 @@ namespace HpackTests
             Assert.False(decoder.HeaderField.Sensitive);
             Assert.Equal(37, decoder.HeaderSize);
             Assert.Equal(8, consumed);
+            Assert.True(decoder.HasInitialState);
             Assert.Equal(decoder.DynamicTableLength, 0);
             Assert.Equal(decoder.DynamicTableUsedSize, 0);
         }
@@ -310,6 +322,7 @@ namespace HpackTests
             Assert.True(decoder.HeaderField.Sensitive);
             Assert.Equal(42, decoder.HeaderSize);
             Assert.Equal(5, consumed);
+            Assert.True(decoder.HasInitialState);
             Assert.Equal(decoder.DynamicTableLength, 0);
             Assert.Equal(decoder.DynamicTableUsedSize, 0);
         }
@@ -332,6 +345,7 @@ namespace HpackTests
             Assert.True(decoder.HeaderField.Sensitive);
             Assert.Equal(37, decoder.HeaderSize);
             Assert.Equal(8, consumed);
+            Assert.True(decoder.HasInitialState);
             Assert.Equal(decoder.DynamicTableLength, 0);
             Assert.Equal(decoder.DynamicTableUsedSize, 0);
         }
@@ -348,6 +362,7 @@ namespace HpackTests
             Assert.False(decoder.Done);
             Assert.Equal(16, decoder.DynamicTableSize);
             Assert.Equal(1, consumed);
+            Assert.True(decoder.HasInitialState);
 
             // Table update in multiple steps
             buf = new Buffer();
@@ -356,6 +371,7 @@ namespace HpackTests
             Assert.False(decoder.Done);
             Assert.Equal(16, decoder.DynamicTableSize);
             Assert.Equal(1, consumed);
+            Assert.False(decoder.HasInitialState);
             // 2nd data part
             buf = new Buffer();
             buf.WriteByte(0x80); // I = 31
@@ -369,6 +385,7 @@ namespace HpackTests
             Assert.False(decoder.Done);
             Assert.Equal(2079, decoder.DynamicTableSize);
             Assert.Equal(1, consumed);
+            Assert.True(decoder.HasInitialState);
         }
 
         [Fact]
@@ -388,6 +405,7 @@ namespace HpackTests
             Assert.Equal(42, decoder.HeaderSize);
             Assert.Equal(2, consumed);
             Assert.Equal(16, decoder.DynamicTableSize);
+            Assert.True(decoder.HasInitialState);
         }
 
         [Fact]
@@ -413,6 +431,7 @@ namespace HpackTests
             var consumed = decoder.Decode(buf.View);
             Assert.False(decoder.Done);
             Assert.Equal(0, consumed);
+            Assert.True(decoder.HasInitialState);
         }
 
         [Fact]
