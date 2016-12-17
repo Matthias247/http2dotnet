@@ -23,7 +23,6 @@ namespace Http2
         {
             public int MaxFrameSize;
             public int MaxHeaderListSize;
-            public int InitialWindowSize;
         }
 
         private struct StreamData
@@ -91,6 +90,8 @@ namespace Http2
         bool goAwayQueued = false;
         /// <summary>Whether the writer was requested to close after completing all writes</summary>
         bool closeRequested = false;
+        /// <summary>Whether CloseAsync() has already been called on the connection</summary>
+        int closeConnectionIssued = 0;
 
         /// <summary>Outstanding writes the are associated to the connection</summary>
         Queue<WriteRequest> WriteQueue = new Queue<WriteRequest>();
@@ -139,6 +140,13 @@ namespace Http2
         {
             try
             {
+                // If we are a client then we have to write the preface before
+                // doing anything else
+                if (!Connection.IsServer)
+                {
+                    await ClientPreface.WriteAsync(outStream);
+                }
+
                 bool continueRun = true;
                 while (continueRun)
                 {
@@ -177,7 +185,8 @@ namespace Http2
                     else if (doClose)
                     {
                         // We are tasked to close the connection
-                        await outStream.CloseAsync();
+                        // We simply return from the loop.
+                        // Connection will be closed at the end of the task
                         continueRun = false;
                     }
                 }
@@ -186,23 +195,33 @@ namespace Http2
             {
                 // We will catch this exception if writing to the output stream
                 // will fail at any point of time
-                // We need to fail all pending writes at that point
-                // TODO: Might not be necessary to handle it in case of Close() errors
             }
-            finally
+
+            // Close the connection if that hasn't happened yet
+            // That's even necessary if the an error happened
+            if (Interlocked.CompareExchange(ref closeConnectionIssued, 1, 0) == 0)
             {
-                // Set the closed flag which will avoid new write items to be added
-                lock (mutex)
+                try
                 {
-                    closed = true;
-                    // Fail pending writes that are still queued up
-                    // TODO: Is that safe inside the lock?
-                    FinishAllOutstandingWritesLocked();
+                    await outStream.CloseAsync();
                 }
-                _pool.Return(this.outBuf);
-                this.outBuf = null;
-                doneTcs.SetResult(true);
+                catch (Exception)
+                {
+                    // There's not really something meaningfull we can do here
+                }
             }
+
+            // Set the closed flag which will avoid new write items to be added
+            lock (mutex)
+            {
+                closed = true;
+                // Fail pending writes that are still queued up
+                // TODO: Is that safe inside the lock?
+                FinishAllOutstandingWritesLocked();
+            }
+            _pool.Return(this.outBuf);
+            this.outBuf = null;
+            doneTcs.SetResult(true);
         }
 
         /// <summary>
@@ -450,14 +469,18 @@ namespace Http2
         }
 
         private async ValueTask<WriteResult> PerformWriteRequestAsync(
-            uint streamId, Action<WriteRequest> populateRequest)
+            uint streamId, Action<WriteRequest> populateRequest, bool closeAfterwards)
         {
             WriteRequest wr = null;
             lock (mutex)
             {
-                if (this.closed)
+                if (closed || closeRequested)
                 {
                     return WriteResult.ConnectionClosedError;
+                }
+                if (closeAfterwards)
+                {
+                    closeRequested = true;
                 }
 
                 wr = AllocateWriteRequest();
@@ -499,7 +522,8 @@ namespace Http2
                 wr => {
                     wr.Header = header;
                     wr.Headers = headers;
-                });
+                },
+                false);
         }
 
         public ValueTask<WriteResult> WriteSettings(
@@ -510,7 +534,8 @@ namespace Http2
                 wr => {
                     wr.Header = header;
                     wr.Data = data;
-                });
+                },
+                false);
         }
 
         public ValueTask<WriteResult> WriteResetStream(
@@ -521,7 +546,8 @@ namespace Http2
                 wr => {
                     wr.Header = header;
                     wr.ResetFrameData = data;
-                });
+                },
+                false);
         }
 
         public ValueTask<WriteResult> WritePing(
@@ -532,7 +558,8 @@ namespace Http2
                 wr => {
                     wr.Header = header;
                     wr.Data = data;
-                });
+                },
+                false);
         }
 
         public ValueTask<WriteResult> WriteWindowUpdate(
@@ -543,18 +570,20 @@ namespace Http2
                 wr => {
                     wr.Header = header;
                     wr.WindowUpdateData = data;
-                });
+                },
+                false);
         }
 
         public ValueTask<WriteResult> WriteGoAway(
-            FrameHeader header, GoAwayFrameData data)
+            FrameHeader header, GoAwayFrameData data, bool closeAfterwards)
         {
             return PerformWriteRequestAsync(
                 0,
                 wr => {
                     wr.Header = header;
                     wr.GoAwayData = data;
-                });
+                },
+                closeAfterwards);
         }
 
         public ValueTask<WriteResult> WriteData(
@@ -565,7 +594,8 @@ namespace Http2
                 wr => {
                     wr.Header = header;
                     wr.Data = data;
-                });
+                },
+                false);
         }
 
         /// <summary>
@@ -857,6 +887,7 @@ namespace Http2
                     // about that. However this this currently not supported.
                     // Additionally changing the size would cause a data race, as
                     // it is concurrently used by the writer process.
+                    // TODO: Fix that case
                 }
             }
         }
@@ -872,7 +903,7 @@ namespace Http2
         /// Returns false in cases where an overflow error for the flow control
         /// window occurs.
         /// </returns>
-        public Http2Error? UpdateFlowControlWindow(int streamId, int amount)
+        public Http2Error? UpdateFlowControlWindow(uint streamId, int amount)
         {
             var wakeup = false;
 

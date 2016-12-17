@@ -228,10 +228,10 @@ namespace Http2
 
         public void Cancel()
         {
-            Reset(ErrorCode.Cancel);
+            Reset(ErrorCode.Cancel, false);
         }
 
-        internal void Reset(ErrorCode errorCode)
+        internal void Reset(ErrorCode errorCode, bool fromRemote)
         {
             lock (stateMutex)
             {
@@ -246,26 +246,40 @@ namespace Http2
                 state = StreamState.Reset;
             }
 
-            // Send a reset frame with the given error code
-            var fh = new FrameHeader
+            if (!fromRemote)
             {
-                StreamId = this.Id,
-                Type = FrameType.ResetStream,
-                Flags = 0,
-            };
-            var resetData = new ResetFrameData
+                // Send a reset frame with the given error code
+                var fh = new FrameHeader
+                {
+                    StreamId = this.Id,
+                    Type = FrameType.ResetStream,
+                    Flags = 0,
+                };
+                var resetData = new ResetFrameData
+                {
+                    ErrorCode = errorCode
+                };
+                var writeResetTask = connection.Writer.WriteResetStream(fh, resetData);
+                // We don't really need to care about this task.
+                // If it fails the stream will be reset anyway internally.
+                // And failing most likely occured because of a dead connection.
+                // The only helpful thing could be attaching a continuation for
+                // logging
+            }
+            else
             {
-                ErrorCode = errorCode
-            };
-            var writeResetTask = connection.Writer.WriteResetStream(fh, resetData);
-            // We don't really need to care about this task.
-            // If it fails the stream will be reset anyway internally.
-            // And failing most likely occured because of a dead connection.
-            // The only helpful thing could be attaching a continuation for
-            // logging
+                // If we don't send a notification we still have to unregister
+                // from the writer in order to cancel pending writes
+                connection.Writer.RemoveStream(this.Id);
+            }
 
             // Unregister from the connection
-            this.connection.UnregisterStream(this);
+            // If this has happened from the remote side the connection will
+            //already have performed this
+            if (!fromRemote)
+            {
+                this.connection.UnregisterStream(this);
+            }
 
             // Unblock all waiters
             readDataPossible.Set();

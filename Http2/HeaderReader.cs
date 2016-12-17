@@ -102,19 +102,9 @@ namespace Http2
             if (f.HasFlag(HeadersFrameFlags.Priority))
             {
                 // Extract priority
-                var dep = (((uint)buffer[offset + 0] & 0x7F) << 24 )
-                    | ((uint)buffer[offset + 1] << 16)
-                    | (uint)(buffer[offset + 2] << 8)
-                    | (uint)buffer[offset + 3];
-                var exclusive = (buffer[offset + 0] & 0x80) != 0;
-                var weight = buffer[offset + 4];
+                prioData = PriorityData.DecodeFrom(
+                    new ArraySegment<byte>(buffer, offset, 5));
                 offset += 5;
-                prioData = new PriorityData
-                {
-                    StreamDependency = dep,
-                    StreamDependencyIsExclusive = exclusive,
-                    Weight = weight,
-                };
             }
 
             var contentLen = firstHeader.Length - offset - padLen;

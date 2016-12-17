@@ -140,6 +140,49 @@ namespace Http2
         /// This field is only present if the PRIORITY flag is set.
         /// </summary>
         public byte Weight;
+
+        public const int Size = 5;
+
+        /// <summary>
+        /// Encodes the priority data into the given byte array
+        /// This must be at least 5 bytes long
+        /// </summary>
+        public void EncodeInto(ArraySegment<byte> bytes)
+        {
+            var b = bytes.Array;
+            var o = bytes.Offset;
+
+            b[o+0] = (byte)((StreamDependency >> 24) & 0x7F);
+            b[o+1] = (byte)((StreamDependency >> 16) & 0xFF);
+            b[o+2] = (byte)((StreamDependency >> 8) & 0xFF);
+            b[o+3] = (byte)((StreamDependency) & 0xFF);
+            if (StreamDependencyIsExclusive) b[o+0] |= 0x80;
+            b[o+4] = Weight;
+        }
+
+        /// <summary>
+        /// Encodes the priority data into the given byte array
+        /// This must be at least 5 bytes long
+        /// </summary>
+        public static PriorityData DecodeFrom(ArraySegment<byte> bytes)
+        {
+            var b = bytes.Array;
+            var o = bytes.Offset;
+
+            var dep = (((uint)b[o + 0] & 0x7F) << 24 )
+                | ((uint)b[o + 1] << 16)
+                | (uint)(b[o + 2] << 8)
+                | (uint)b[o + 3];
+            var exclusive = (b[o + 0] & 0x80) != 0;
+            var weight = b[o + 4];
+
+            return new PriorityData
+            {
+                StreamDependency = dep,
+                StreamDependencyIsExclusive = exclusive,
+                Weight = weight,
+            };
+        }
     }
 
     /// <summary>
@@ -333,9 +376,8 @@ namespace Http2
             var o = bytes.Offset;
 
             var increment =
-                (b[o + 0] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o+3];
+                ((b[o + 0] & 0x7F) << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o+3];
 
-            // TODO: Check for negative window updates somewhere
             return new WindowUpdateData
             {
                 WindowSizeIncrement = increment,
@@ -367,6 +409,27 @@ namespace Http2
             b[o+2] = (byte)((ec >> 8) & 0xFF);
             b[o+3] = (byte)((ec) & 0xFF);
         }
+
+        /// <summary>
+        /// Encodes the window update data into the given byte array
+        /// This must be at least 4 bytes long
+        /// </summary>
+        public static ResetFrameData DecodeFrom(ArraySegment<byte> bytes)
+        {
+            var b = bytes.Array;
+            var o = bytes.Offset;
+
+            var errc =
+                ((uint)b[o + 0] << 24)
+                | ((uint)b[o + 1] << 16)
+                | ((uint)b[o + 2] << 8)
+                | (uint)b[o+3];
+
+            return new ResetFrameData
+            {
+                ErrorCode = (ErrorCode)errc,
+            };
+        }
     }
 
     /// <summary>
@@ -381,7 +444,7 @@ namespace Http2
         public int RequiredSize => 8 + DebugData.Count;
 
         /// <summary>
-        /// Encodes the window update data into the given byte array
+        /// Encodes the goaway data into the given byte array
         /// This must be at least RequiredSize bytes long
         /// </summary>
         public void EncodeInto(ArraySegment<byte> bytes)
@@ -398,6 +461,35 @@ namespace Http2
             b[o+6] = (byte)((ErrorCode >> 8) & 0xFF);
             b[o+7] = (byte)((ErrorCode) & 0xFF);
             Array.Copy(DebugData.Array, DebugData.Offset, b, o+8, DebugData.Count);
+        }
+
+        /// <summary>
+        /// Encodes the goaway data into the given byte array
+        /// This must be at least 8 bytes long
+        /// </summary>
+        public static GoAwayFrameData DecodeFrom(ArraySegment<byte> bytes)
+        {
+            var b = bytes.Array;
+            var o = bytes.Offset;
+
+            var lastStreamId =
+                (((uint)b[o + 0] & 0x7F) << 24)
+                | ((uint)b[o + 1] << 16)
+                | ((uint)b[o + 2] << 8)
+                | (uint)b[o+3];
+            var errc =
+                ((uint)b[o + 4] << 24)
+                | ((uint)b[o + 5] << 16)
+                | ((uint)b[o + 6] << 8)
+                | (uint)b[o+7];
+            var debugData = new ArraySegment<byte>(b, o+8, bytes.Count - 8);
+
+            return new GoAwayFrameData
+            {
+                LastStreamId = lastStreamId,
+                ErrorCode = errc,
+                DebugData = debugData,
+            };
         }
     }
 }
