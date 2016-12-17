@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
+using Hpack;
 
 namespace Http2
 {
@@ -125,7 +126,7 @@ namespace Http2
         /// A 31-bit stream identifier for the stream that this stream depends on.
         /// This field is only present if the PRIORITY flag is set
         /// </summary>
-        public int StreamDependency;
+        public uint StreamDependency;
 
         /// <summary>
         /// A single-bit flag indicating that the stream dependency is exclusive.
@@ -399,5 +400,4 @@ namespace Http2
             Array.Copy(DebugData.Array, DebugData.Offset, b, o+8, DebugData.Count);
         }
     }
-
 }

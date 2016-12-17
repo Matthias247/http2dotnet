@@ -30,22 +30,27 @@ namespace Http2
         private Connection connection;
         private StreamState state;
         private object stateMutex = new object();
+
         /// <summary>Allows only a single write at a time</summary>
         private SemaphoreSlim writeMutex = new SemaphoreSlim(1);
-        /// <summary>Unblocks pending read operations</summary>
-        private AsyncManualResetEvent recvPossible = new AsyncManualResetEvent(false);
-
         private bool headersSent = false;
         private bool dataSent = false;
 
         private bool headersReceived = false;
+        private bool dataReceived = false;
         private bool trailersReceived = false;
         private List<HeaderField> inHeaders;
         private List<HeaderField> inTrailers;
 
+        // Semaphores for unblocking async access operations
+        private AsyncManualResetEvent readDataPossible = new AsyncManualResetEvent(false);
+        private AsyncManualResetEvent readHeadersPossible = new AsyncManualResetEvent(false);
+        private AsyncManualResetEvent readTrailersPossible = new AsyncManualResetEvent(false);
+
         private int receiveWindow; // Might be superficial since that info is also in RingBuf size
         private RingBuf recvBuf;
 
+        private static readonly HeaderField[] EmptyHeaders = new HeaderField[0];
         private static readonly ArraySegment<byte> EmptyBuffer =
             new ArraySegment<byte>(new byte[0]);
 
@@ -221,11 +226,6 @@ namespace Http2
             return null;
         }
 
-        private void WakeupWaiters()
-        {
-            this.recvPossible.Set();
-        }
-
         public void Cancel()
         {
             Reset(ErrorCode.Cancel);
@@ -267,15 +267,17 @@ namespace Http2
             // Unregister from the connection
             this.connection.UnregisterStream(this);
 
-            // Unblock a waiting reader
-            WakeupWaiters();
+            // Unblock all waiters
+            readDataPossible.Set();
+            readTrailersPossible.Set();
+            readHeadersPossible.Set();
         }
 
         public async ValueTask<StreamReadResult> ReadAsync(ArraySegment<byte> buffer)
         {
             while (true)
             {
-                await recvPossible;
+                await readDataPossible;
 
                 int windowUpdateAmount = 0;
                 StreamReadResult result = new StreamReadResult();
@@ -285,7 +287,7 @@ namespace Http2
                 {
                     if (state == StreamState.Reset)
                     {
-                        throw new Exception("Stream is reset");
+                        throw new StreamResetException();
                     }
 
                     if (recvBuf != null && recvBuf.Available > 0)
@@ -325,7 +327,7 @@ namespace Http2
 
                     // No data and not closed or reset
                     // Sleep until data arrives or stream is reset
-                    recvPossible.Reset();
+                    readDataPossible.Reset();
                 }
 
                 if (hasResult)
@@ -383,12 +385,18 @@ namespace Http2
             await writeMutex.WaitAsync();
             try
             {
-                bool canWrite = false;
-
                 lock (stateMutex)
                 {
-                    canWrite = state == StreamState.Open || state == StreamState.HalfClosedRemote;
-                    if (state == StreamState.Open && endOfStream)
+                    // Check the current stream state
+                    if (state == StreamState.Reset)
+                    {
+                        throw new StreamResetException();
+                    }
+                    else if (state != StreamState.Open && state != StreamState.HalfClosedRemote)
+                    {
+                        throw new Exception("Attempt to write data in invalid stream state");
+                    }
+                    else if (state == StreamState.Open && endOfStream)
                     {
                         state = StreamState.HalfClosedLocal;
                     }
@@ -397,8 +405,9 @@ namespace Http2
                         state = StreamState.Closed;
                         removeStream = true;
                     }
-                    // TODO: Send data depending on the stream state
-                    // If we have not sent headers before we also need to do that
+
+                    // Besides state check also check if headers have already been sent
+                    // StreamState.Open could mean we only have received them
                     if (!this.headersSent)
                     {
                         throw new Exception("Attempted to write data before headers");
@@ -415,7 +424,6 @@ namespace Http2
                 // in between.
                 // The only thing that may happen is that the stream get's reset in between,
                 // which would be reported through the ConnectionWriter to us
-                if (!canWrite) throw new Exception("Stream is not writeable"); // TODO: Make better
 
                 var fh = new FrameHeader {
                     StreamId = this.Id,
@@ -424,7 +432,11 @@ namespace Http2
                 };
 
                 var res = await connection.Writer.WriteData(fh, buffer);
-                if (res != ConnectionWriter.WriteResult.Success)
+                if (res == ConnectionWriter.WriteResult.StreamResetError)
+                {
+                    throw new StreamResetException();
+                }
+                else if (res != ConnectionWriter.WriteResult.Success)
                 {
                     throw new Exception("Can not write to stream"); // TODO: Improve me
                 }
@@ -441,104 +453,67 @@ namespace Http2
             }
         }
 
-        public async ValueTask<object> CloseAsync()
+        public ValueTask<object> CloseAsync()
         {
-            var removeStream = false;
-            var sendClose = false;
-
-            await writeMutex.WaitAsync();
-            try
-            {
-                lock (stateMutex)
-                {
-                    // TODO: Send data depending on the stream state
-                    switch (state)
-                    {
-                        case StreamState.Idle:
-                            // TODO: Review these states.
-                            // Actually we can't close without going to Open before
-                            // What we must to is send the headers with end of stream flag
-                            // We must even send trailers here too!
-                        case StreamState.ReservedLocal: // TODO: Review these states. Used for push promise
-                        case StreamState.ReservedRemote: // TODO: Review these states. Used for push promise
-                        case StreamState.Open:
-                            state = StreamState.HalfClosedLocal;
-                            sendClose = true;
-                            dataSent = true;
-                            // TODO: Open can mean we have sent the headers or not
-                            // We also may need to send trailers or not
-                            break;
-                        case StreamState.HalfClosedRemote:
-                            state = StreamState.Closed;
-                            sendClose = true;
-                            dataSent = true;
-                            removeStream = true;
-                            break;
-                        case StreamState.HalfClosedLocal:
-                        case StreamState.Closed:
-                        case StreamState.Reset:
-                            // Nothing to do in this cases
-                            break;
-                        default:
-                            throw new Exception("Unhandled stream state");
-                    }
-                }
-
-                if (sendClose)
-                {
-                    var fh = new FrameHeader {
-                        StreamId = this.Id,
-                        Type = FrameType.Data,
-                        Flags = ((byte)DataFrameFlags.EndOfStream),
-                    };
-
-                    var res = await connection.Writer.WriteData(fh, EmptyBuffer);
-                    if (res != ConnectionWriter.WriteResult.Success)
-                    {
-                        // TODO: Throw a better typed exception
-                        throw new Exception("Can not write to stream");
-                    }
-
-                    WakeupWaiters();
-                    // TODO: We currently only wake up the reader,
-                    // which is not affected through a local close.
-                    // So this should not be needed
-                }
-            }
-            finally
-            {
-                writeMutex.Release();
-                if (removeStream)
-                {
-                    connection.UnregisterStream(this);
-                }
-            }
-
-            return null;
+            return this.WriteAsync(EmptyBuffer, true);
         }
 
-        public Http2Error? ProcessHeaders(
-            List<HeaderField> headers,
-            bool endOfStream)
+        public async ValueTask<IEnumerable<HeaderField>> ReadHeaders()
         {
+            await readHeadersPossible;
+            IEnumerable<HeaderField> result = null;
+            lock (stateMutex)
+            {
+                if (state == StreamState.Reset)
+                {
+                    throw new StreamResetException();
+                }
+                if (inHeaders != null) result = inHeaders;
+                else result = EmptyHeaders;
+            }
+            return result;
+        }
+
+        public async ValueTask<IEnumerable<HeaderField>> ReadTrailers()
+        {
+            await readTrailersPossible;
+            IEnumerable<HeaderField> result = null;
+            lock (stateMutex)
+            {
+                if (state == StreamState.Reset)
+                {
+                    throw new StreamResetException();
+                }
+                if (inTrailers != null) result = inTrailers;
+                else result = EmptyHeaders;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Processes the reception of incoming headers
+        /// </summary>
+        public Http2Error? ProcessHeaders(
+            CompleteHeadersFrameData headers)
+        {
+            var wakeupDataWaiter = false;
+            var wakeupHeaderWaiter = false;
+            var wakeupTrailerWaiter = false;
+            var removeStream = false;
+
+            // TODO: Need to verify the headers according to given rules
+
             lock (stateMutex)
             {
                 // Header frames are not valid in all states
                 switch (state)
                 {
-                    case StreamState.Idle:
-                        // Received the first header frame
-                        // This moves the stream into the Open state
-                        state = StreamState.Open;
-                        if (endOfStream) state = StreamState.HalfClosedRemote;
-                        headersReceived = true;
-                        // TODO: Wakeup the reader?
-                        break;
                     case StreamState.ReservedLocal:
                     case StreamState.ReservedRemote:
                         // Push promises are currently not implemented
                         // So this needs to be reviewed later on
                         throw new NotImplementedException();
+                    case StreamState.Idle:
                     case StreamState.Open:
                     case StreamState.HalfClosedLocal:
                         // Open can mean we have already received headers
@@ -551,35 +526,97 @@ namespace Http2
                         // This required no data in between. And that the
                         // received headers contain a 1xy status code
                         // Trailers must have EndOfStream set.
-                        if (connection.IsServer)
+                        // Decision for the current point of time:
+                        // Don't support informational frames, since there is
+                        // no way to store the second headers
+                        // This must be handled on a higher layer.
+                        // On this layer we will reset the stream if we get
+                        // additional headers
+                        if (!headersReceived)
                         {
-                            // TODO: On Server side we can't be in half-closed here
-                            // Is this a problem?
-                            // Actually on server side we may only receive trailers here
-                            // headers are received in State Idle
-
+                            // We are receiving headers
+                            HeaderValidationResult hvr;
+                            if (connection.IsServer)
+                            {
+                                hvr = HeaderValidator.ValidateRequestHeaders(headers.Headers);
+                            }
+                            else
+                            {
+                                hvr = HeaderValidator.ValidateResponseHeaders(headers.Headers);
+                            }
+                            if (hvr != HeaderValidationResult.Ok)
+                            {
+                                return new Http2Error
+                                {
+                                    Type = ErrorType.StreamError,
+                                    Code = ErrorCode.ProtocolError,
+                                    Message = "Received invalid headers",
+                                };
+                            }
+                            headersReceived = true;
+                            wakeupHeaderWaiter = true;
+                            inHeaders = headers.Headers;
+                        }
+                        else if (!dataReceived)
+                        {
+                            // We already have received headers, so this should
+                            // be trailers. However there was no DATA frame in
+                            // between, so this is simply invalid.
+                            return new Http2Error
+                            {
+                                Type = ErrorType.StreamError,
+                                Code = ErrorCode.ProtocolError,
+                                Message = "Received trailers without headers",
+                            };
                         }
                         else
                         {
-
+                            // These are trailers
+                            // trailers must have end of stream set. It is not
+                            // valid to receive multiple trailers
+                            if (!headers.EndOfStream)
+                            {
+                                return new Http2Error
+                                {
+                                    Type = ErrorType.StreamError,
+                                    Code = ErrorCode.ProtocolError,
+                                    Message = "Received trailers without EndOfStream flag",
+                                };
+                            }
+                            var hvr = HeaderValidator.ValidateTrailingHeaders(headers.Headers);
+                            if (hvr != HeaderValidationResult.Ok)
+                            {
+                                return new Http2Error
+                                {
+                                    Type = ErrorType.StreamError,
+                                    Code = ErrorCode.ProtocolError,
+                                    Message = "Received invalid trailers",
+                                };
+                            }
+                            trailersReceived = true;
+                            wakeupTrailerWaiter = true;
+                            inTrailers = headers.Headers;
                         }
-                        if (headersReceived)
-                        {
 
-                        }
-                        if (endOfStream)
+                        // Handle state changes that are caused by HEADERS frame
+                        if (state == StreamState.Idle)
                         {
-                            if (state == StreamState.Open)
+                            state = StreamState.Open;
+                        }
+                        if (headers.EndOfStream)
+                        {
+                            if (state == StreamState.HalfClosedLocal)
+                            {
+                                state = StreamState.Closed;
+                                removeStream = true;
+                            }
+                            else // Must be Open, since Idle moves to Open
                             {
                                 state = StreamState.HalfClosedRemote;
                             }
-                            else // HalfClosedLocal
-                            {
-                                state = StreamState.Closed;
-                                // TODO: The stream must be removed from the connection
-                            }
+                            wakeupTrailerWaiter = true;
+                            wakeupDataWaiter = true;
                         }
-                        // TODO: Wakeup the reader?
                         break;
                     case StreamState.HalfClosedRemote:
                     case StreamState.Closed:
@@ -595,15 +632,189 @@ namespace Http2
                     case StreamState.Reset:
                         // The stream was already reset
                         // What we really should do here depends on the previous state,
-                        // which is not stored for efficiency.
-                        // But most likely the incoming data is just late and the remote
-                        // has not received our Reset.
-                        // We just ignore the incoming frame.
+                        // which is not stored for efficiency. If we reset the
+                        // stream late headers are ok. If the remote resetted it
+                        // this is a protocol error for the stream.
+                        // As it does not really matter just ignore the frame.
                         break;
                     default:
                         throw new Exception("Unhandled stream state");
                 }
             }
+
+            // Wakeup any blocked calls that are waiting on headers or end of stream
+            if (wakeupHeaderWaiter)
+            {
+                readHeadersPossible.Set();
+            }
+            if (wakeupDataWaiter)
+            {
+                readDataPossible.Set();
+            }
+            if (wakeupTrailerWaiter)
+            {
+                readTrailersPossible.Set();
+            }
+
+            if (removeStream)
+            {
+                connection.UnregisterStream(this);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Processes the reception of a DATA frame.
+        /// The connection is responsible for checking the maximum frame length
+        /// before calling this function.
+        /// </summary>
+        public async ValueTask<Http2Error?> ProcessData(
+            FrameHeader dataHeader,
+            IStreamReader inputStream,
+            byte[] tempBuf)
+        {
+            // TODO: Actually we should read the data directly into the RingBuf
+            // However as async reads therein are not supported we read it in the
+            // temp buffer and copy it into the RingBuf later on.
+            // Remark: The data always has to be consumed, even if the stream is
+            // reset. Otherwise the remaining protocol framing would be broken.
+            await inputStream.ReadAll(
+                new ArraySegment<byte>(tempBuf, 0, dataHeader.Length));
+
+            // Checkout the real data content
+            var offset = 0;
+            var length = dataHeader.Length;
+            var flags = (DataFrameFlags)dataHeader.Flags;
+            if (flags.HasFlag(DataFrameFlags.Padded))
+            {
+                // Must have at least 1 byte
+                if (length < 1)
+                {
+                    return new Http2Error
+                    {
+                        Type = ErrorType.StreamError,
+                        Code = ErrorCode.FrameSizeError,
+                        Message = "Frame is too small to contain padding",
+                    };
+                }
+                var padLen = tempBuf[0];
+                offset++;
+                length--;
+                length -= padLen;
+
+                if (length < 0)
+                {
+                    return new Http2Error
+                    {
+                        Type = ErrorType.StreamError,
+                        Code = ErrorCode.FrameSizeError,
+                        Message = "Frame is too small after substracting padding",
+                    };
+                }
+            }
+
+            var contentSegment = new ArraySegment<byte>(tempBuf, offset, length);
+            var wakeupDataWaiter = false;
+            var wakeupTrailerWaiter = false;
+            var removeStream = false;
+
+            lock (stateMutex)
+            {
+                // Header frames are not valid in all states
+                switch (state)
+                {
+                    case StreamState.ReservedLocal:
+                    case StreamState.ReservedRemote:
+                        // Push promises are currently not implemented
+                        // So this needs to be reviewed later on
+                        throw new NotImplementedException();
+                    case StreamState.Open:
+                    case StreamState.HalfClosedLocal:
+                        if (!dataReceived)
+                        {
+                            // Received DATA without HEADERS before.
+                            // As state Open can also mean we only have sent
+                            // headers but not received them checking the state
+                            // alone isn't sufficient.
+                            return new Http2Error
+                            {
+                                Type = ErrorType.StreamError,
+                                Code = ErrorCode.ProtocolError,
+                                Message = "Received trailers without headers",
+                            };
+                        }
+                        // Check if the flow control window is exceeded
+                        if (length > receiveWindow)
+                        {
+                            return new Http2Error
+                            {
+                                Type = ErrorType.StreamError,
+                                Code = ErrorCode.FlowControlError,
+                                Message = "Received window exceeded",
+                            };
+                        }
+                        receiveWindow -= length;
+                        // Copy the data
+                        recvBuf.Write(contentSegment);
+                        dataReceived = true;
+                        wakeupDataWaiter = true;
+                        // Handle state changes that are caused by DATA frames
+                        if (dataHeader.HasEndOfStreamFlag)
+                        {
+                            if (state == StreamState.HalfClosedLocal)
+                            {
+                                state = StreamState.Closed;
+                                removeStream = true;
+                            }
+                            else // Open
+                            {
+                                state = StreamState.HalfClosedRemote;
+                            }
+                            wakeupTrailerWaiter = true;
+                        }
+                        break;
+                    case StreamState.Idle:
+                    case StreamState.HalfClosedRemote:
+                    case StreamState.Closed:
+                        // Received a DATA frame for a stream that was
+                        // already closed or not properly opened from remote side.
+                        // That's not valid
+                        return new Http2Error
+                        {
+                            Code = ErrorCode.StreamClosed,
+                            Type = ErrorType.StreamError,
+                            Message = "Received data for closed stream",
+                        };
+                    case StreamState.Reset:
+                        // The stream was already reset
+                        // What we really should do here depends on the previous state,
+                        // which is not stored for efficiency. If we reset the
+                        // stream late headers are ok. If the remote resetted it
+                        // this is a protocol error for the stream.
+                        // As it does not really matter just ignore the frame.
+                        break;
+                    default:
+                        throw new Exception("Unhandled stream state");
+                }
+            }
+
+            // Wakeup any blocked calls that are waiting on data or end of stream
+            if (wakeupDataWaiter)
+            {
+                // Wakeup any blocked call that waits for headers to get available
+                readDataPossible.Set();
+            }
+            if (wakeupTrailerWaiter)
+            {
+                readTrailersPossible.Set();
+            }
+
+            if (removeStream)
+            {
+                connection.UnregisterStream(this);
+            }
+
             return null;
         }
     }

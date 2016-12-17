@@ -39,6 +39,19 @@ namespace Http2
         void Cancel();
 
         /// <summary>
+        /// Reads the list of incoming header fields from the stream.
+        /// These will include all pseudo header fields.
+        /// However the validity of the header fields will have been verified.
+        /// </summary>
+        ValueTask<IEnumerable<HeaderField>> ReadHeaders();
+
+        /// <summary>
+        /// Reads the list of incoming trailing header fields from the stream.
+        /// The validity of the header fields will have been verified.
+        /// </summary>
+        ValueTask<IEnumerable<HeaderField>> ReadTrailers();
+
+        /// <summary>
         /// Writes a header block for the stream.
         /// </summary>
         /// <param name="headers">
@@ -74,5 +87,12 @@ namespace Http2
         /// after this operation
         /// </param>
         ValueTask<object> WriteAsync(ArraySegment<byte> buffer, bool endOfStream = false);
+    }
+
+    /// <summary>
+    /// Signals that a stream was reset
+    /// </summary>
+    public class StreamResetException : Exception
+    {
     }
 }

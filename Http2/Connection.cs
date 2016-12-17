@@ -49,6 +49,9 @@ namespace Http2
         }
 
         internal ConnectionWriter Writer;
+        internal HeaderReader HeaderReader;
+        internal Settings LocalSettings;
+        internal Settings RemoteSettings;
 
         /// <summary>
         /// Whether the connection represents the client or server part of
@@ -56,18 +59,17 @@ namespace Http2
         /// </summary>
         public readonly bool IsServer;
 
-
         /// <summary>
         /// Unregisters a stream from the map of streams that are managed
         /// by this connection.
         /// </summary>
-        /// <param name="stream">
-        /// The stream to unregister
-        /// </param>
+        /// <param name="stream">The stream to unregister</param>
         internal void UnregisterStream(StreamImpl stream)
         {
             // TODO: Implement me
             throw new NotImplementedException();
         }
+
+        // TODO: Somewhere we need to send window update frames for the connection
     }
 }

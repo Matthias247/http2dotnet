@@ -35,6 +35,86 @@ namespace Http2
         public uint MaxValue;
     }
 
+    /// <summary>
+    /// Structure that stores all known settings for HTTP/2 connections
+    /// </summary>
+    public struct Settings
+    {
+        /// <summary>
+        /// Allows the sender to inform the remote endpoint of the maximum size
+        /// of the header compression table used to decode header blocks, in octets.
+        /// </summary>
+        public uint HeaderTableSize;
+
+        /// <summary>
+        /// This setting can be used to disable server push
+        /// </summary>
+        public bool EnablePush;
+
+        /// <summary>
+        /// Indicates the maximum number of concurrent streams that the sender
+        /// will allow.
+        /// </summary>
+        public uint MaxConcurrentStreams;
+
+        /// <summary>
+        /// Indicates the sender's initial window size (in octets) for
+        /// stream-level flow control
+        /// </summary>
+        public uint InitialWindowSize;
+
+        /// <summary>
+        /// Indicates the size of the largest frame payload that the sender is
+        /// willing to receive, in octets
+        /// </summary>
+        public uint MaxFrameSize;
+
+        /// <summary>
+        /// This advisory setting informs a peer of the maximum size of header
+        /// list that the sender is prepared to accept, in octets
+        /// </summary>
+        public uint MaxHeaderListSize;
+
+        /// <summary>
+        /// Contains the default settings
+        /// </summary>
+        public readonly static Settings Default = new Settings
+        {
+            HeaderTableSize = 4096,
+            EnablePush = true,
+            MaxConcurrentStreams = uint.MaxValue,
+            InitialWindowSize = 65535,
+            MaxFrameSize = 16384,
+            MaxHeaderListSize = uint.MaxValue,
+        };
+
+        /// <summary>
+        /// Contains the minimum value for all settings
+        /// </summary>
+        public readonly static Settings Min = new Settings
+        {
+            HeaderTableSize = 0,
+            EnablePush = false,
+            MaxConcurrentStreams = 1,
+            InitialWindowSize = 1,
+            MaxFrameSize = 16384,
+            MaxHeaderListSize = 1,
+        };
+
+        /// <summary>
+        /// Contains the maximum value for all settings
+        /// </summary>
+        public readonly static Settings Max = new Settings
+        {
+            HeaderTableSize = uint.MaxValue,
+            EnablePush = true,
+            MaxConcurrentStreams = uint.MaxValue,
+            InitialWindowSize = uint.MaxValue,
+            MaxFrameSize = 16777215,
+            MaxHeaderListSize = uint.MaxValue,
+        };
+    }
+
     public struct Setting
     {
         /// <summary>ID of the setting</summary>
