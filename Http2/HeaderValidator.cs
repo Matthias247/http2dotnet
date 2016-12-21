@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 
 using Hpack;
 
@@ -50,8 +49,15 @@ namespace Http2
 
             foreach (var hf in headerFields)
             {
-                if (hf.Name == null || hf.Name.Length == 0) return HeaderValidationResult.ErrorInvalidHeaderFieldName;
+                if (hf.Name == null || hf.Name.Length == 0)
+                {
+                    return HeaderValidationResult.ErrorInvalidHeaderFieldName;
+                }
+
+                // If the header field is not a pseudo header stop here and use
+                // the common validator afterwards
                 if (hf.Name[0] != ':') break;
+
                 switch (hf.Name)
                 {
                     case ":method":
@@ -81,7 +87,7 @@ namespace Http2
 
             // Check if all relevant fields are set exactly one time
             // authority might be empty for asterisk requests
-            if (nrMethod != 1 || nrSchema != 1 || nrPath != 1 ||    (nrAuthority != 0 && nrAuthority != 1))
+            if (nrMethod != 1 || nrSchema != 1 || nrPath != 1 ||(nrAuthority > 1))
             {
                 return HeaderValidationResult.ErrorInvalidPseudoHeader;
             }
@@ -101,8 +107,15 @@ namespace Http2
 
             foreach (var hf in headerFields)
             {
-                if (hf.Name == null || hf.Name.Length == 0) return HeaderValidationResult.ErrorInvalidHeaderFieldName;
+                if (hf.Name == null || hf.Name.Length == 0)
+                {
+                    return HeaderValidationResult.ErrorInvalidHeaderFieldName;
+                }
+
+                // If the header field is not a pseudo header stop here and use
+                // the common validator afterwards
                 if (hf.Name[0] != ':') break;
+
                 switch (hf.Name)
                 {
                     case ":status":
@@ -156,16 +169,39 @@ namespace Http2
         {
             foreach (var hf in headerFields)
             {
-                if (hf.Name == null || hf.Name.Length == 0) return HeaderValidationResult.ErrorInvalidHeaderFieldName;
-                if (hf.Name[0] == ':') return HeaderValidationResult.ErrorInvalidPseudoHeader;
-                // Check if header field name is completly lowercased
-                if (hf.Name.Any(char.IsUpper)) return HeaderValidationResult.ErrorInvalidFieldNameCase;
+                if (hf.Name == null || hf.Name.Length == 0)
+                {
+                    return HeaderValidationResult.ErrorInvalidHeaderFieldName;
+                }
 
-                if (hf.Value == null) return HeaderValidationResult.ErrorInvalidHeaderFieldValue;
+                // Normal header fields may not start with :, because this means
+                // there's a pseudo header among the normal headers
+                if (hf.Name[0] == ':')
+                {
+                    return HeaderValidationResult.ErrorInvalidPseudoHeader;
+                }
+
+                // Check if header field name is completly lowercased
+                if (hf.Name.Any(char.IsUpper))
+                {
+                    return HeaderValidationResult.ErrorInvalidFieldNameCase;
+                }
+
+                // Check if the value of the header field is not null
+                if (hf.Value == null)
+                {
+                    return HeaderValidationResult.ErrorInvalidHeaderFieldValue;
+                }
 
                 // Don't allow Connection headers, which are not supported by HTTP/2
-                if (hf.Name == "connection") return HeaderValidationResult.ErrorInvalidConnectionHeader;
-                if (hf.Name == "te" && hf.Value != "trailers") return HeaderValidationResult.ErrorInvalidConnectionHeader;
+                if (hf.Name == "connection")
+                {
+                    return HeaderValidationResult.ErrorInvalidConnectionHeader;
+                }
+                if (hf.Name == "te" && hf.Value != "trailers")
+                {
+                    return HeaderValidationResult.ErrorInvalidConnectionHeader;
+                }
 
                 // TODO: We might want to report that error also on all other
                 // connection related header fields, but which are they?

@@ -191,6 +191,9 @@ namespace Http2
                             lock (shared.Mutex)
                             {
                                 shared.streamMap.TryGetValue(err.Value.StreamId, out stream);
+                                // TODO: Does it make sense to remove the stream
+                                // already here from the map or will that result
+                                // in a race
                             }
 
                             if (stream != null)

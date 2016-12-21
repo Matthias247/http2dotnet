@@ -48,15 +48,20 @@ namespace Http2
         /// purposes.
         /// </summary>
         public string Message;
+
+        public override string ToString()
+        {
+            return $"Http2Error{{streamId={StreamId}, code={Code}, message=\"{Message}\"}}";
+        }
     }
 
     /// <summary>
-    /// Utilities for HTTP/2 error codes
+    /// Extension methods for HTTP/2 error codes
     /// </summary>
     public static class ErrorCodeExtensions
     {
-        private static readonly Dictionary<ErrorCode, string>
-        Descriptions = new Dictionary<ErrorCode, string>
+        private static readonly Dictionary<ErrorCode, string> Descriptions =
+            new Dictionary<ErrorCode, string>
         {
             {
                 ErrorCode.NoError,
