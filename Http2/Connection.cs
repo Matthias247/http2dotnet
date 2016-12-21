@@ -518,8 +518,7 @@ namespace Http2
 
                 // Update the remote settings from that data
                 // This will also validate the settings
-                var err = SettingsUpdater.UpdateSettings(
-                    ref RemoteSettings,
+                var err = RemoteSettings.UpdateFromData(
                     new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
                 if (err != null)
                 {
