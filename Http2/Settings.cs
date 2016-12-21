@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 
 namespace Http2
 {
@@ -36,7 +35,7 @@ namespace Http2
     }
 
     /// <summary>
-    /// Structure that stores all known settings for HTTP/2 connections
+    /// Structure that stores all known settings for HTTP/2 connections.
     /// </summary>
     public struct Settings
     {
@@ -113,91 +112,119 @@ namespace Http2
             MaxFrameSize = 16777215,
             MaxHeaderListSize = uint.MaxValue,
         };
-    }
 
-    public struct Setting
-    {
-        /// <summary>ID of the setting</summary>
-        public SettingId ID;
-        /// <summary>Value of the setting</summary>
-        public uint Value;
-    }
+        private void EncodeSingleSetting(
+            ushort id, uint value, byte[] buffer, int offset)
+        {
+            // Write 16 bit ID
+            buffer[offset+0] = (byte)((id >> 8) & 0xFF);
+            buffer[offset+1] = (byte)((id) & 0xFF);
 
-    /// <summary>
-    /// Utilities for working with SETTINGS frames and their data
-    /// </summary>
-    public static class SettingTools
-    {
-        private static SettingMetaData MakeSettingMetaData(
-          uint InitialValue, uint MinValue, uint MaxValue
-        )
-        {
-            return new SettingMetaData
-            {
-                InitialValue = InitialValue,
-                MinValue = MinValue,
-                MaxValue = MaxValue,
-            };
-        }
-        
-        /// <summary>
-        /// Initial, Minimal and Maximum values for the settings as defined in
-        /// the HTTP/2 specification
-        /// </summary>
-        private static readonly Dictionary<SettingId, SettingMetaData> Boundaries =
-            new Dictionary<SettingId, SettingMetaData>
-        {
-            [SettingId.HeaderTableSize] = MakeSettingMetaData(4096, 0, uint.MaxValue),
-            [SettingId.EnablePush] = MakeSettingMetaData(1, 0, 1),
-            [SettingId.MaxConcurrentStreams] = MakeSettingMetaData(uint.MaxValue, 1, uint.MaxValue),
-            [SettingId.InitialWindowSize] = MakeSettingMetaData(65535, 1, int.MaxValue),
-            [SettingId.MaxFrameSize] = MakeSettingMetaData(16384, 16384, 16777215),
-            [SettingId.MaxHeaderListSize] = MakeSettingMetaData(uint.MaxValue, 0, uint.MaxValue),
-        };
-
-        /// <summary>Returns the initial value of the setting with the given ID</summary>
-        public static uint? GetInitialValue(SettingId id)
-        {
-            SettingMetaData si;
-            if (Boundaries.TryGetValue(id, out si))
-            {
-                return si.InitialValue;
-            }
-            return null;
+            // Write 32bit value
+            buffer[offset+2] = (byte)((value >> 24) & 0xFF);
+            buffer[offset+3] = (byte)((value >> 16) & 0xFF);
+            buffer[offset+4] = (byte)((value >> 8) & 0xFF);
+            buffer[offset+5] = (byte)((value) & 0xFF);
         }
 
         /// <summary>
-        /// Creates a map of default settings as defined in the HTTP/2 specification
+        /// Returns the required size for encoding all settings into the body
+        /// of a SETTINGS frame.
         /// </summary>
-        public static Dictionary<SettingId, Setting> CreateDefaultSettings()
+        public int RequiredSize => 6*6;
+
+        /// <summary>
+        /// Encodes the settings into a byte array.
+        /// This must be long enough to hold all settings (36 bytes).
+        /// </summary>
+        public void EncodeInto(ArraySegment<byte> bytes)
         {
-            var result = new Dictionary<SettingId, Setting>();
-            foreach (var b in Boundaries)
-            {
-                var id = b.Key;
-                var val = b.Value.InitialValue;
-                result[id] = new Setting { ID = id, Value = val };
-            }
-            return result;
+            var b = bytes.Array;
+            var o = bytes.Offset;
+            
+            EncodeSingleSetting(
+                (ushort)SettingId.EnablePush, EnablePush ? 1u : 0u, b, o);
+            o += 6;
+            EncodeSingleSetting(
+                (ushort)SettingId.HeaderTableSize, HeaderTableSize, b, o);
+            o += 6;
+            EncodeSingleSetting(
+                (ushort)SettingId.InitialWindowSize, InitialWindowSize, b, o);
+            o += 6;
+            EncodeSingleSetting(
+                (ushort)SettingId.MaxConcurrentStreams, MaxConcurrentStreams, b, o);
+            o += 6;
+            EncodeSingleSetting(
+                (ushort)SettingId.MaxFrameSize, MaxFrameSize, b, o);
+            o += 6;
+            EncodeSingleSetting(
+                (ushort)SettingId.MaxHeaderListSize, MaxHeaderListSize, b, o);
         }
 
         /// <summary>
-        /// Validates whether a setting is in a known boundary.
-        /// Returns an error if the setting is invalid or null if ok.
+        /// Modifies the value of setting with the given ID to the new value.
         /// </summary>
-        public static Http2Error? ValidateSetting(ushort id, uint value)
+        /// <param name="id">The ID of the setting to modify</param>
+        /// <param name="value">The new value of the setting</param>
+        /// <returns>An error value if the new setting value is not valid</returns>
+        public Http2Error? ModifyById(ushort id, uint value)
         {
-            SettingMetaData meta;
-            if (!Boundaries.TryGetValue((SettingId)id, out meta))
+            switch ((SettingId)id)
             {
-                // Ignore unknown settings
-                return null;
+                case SettingId.EnablePush:
+                    if (value == 0 || value == 1)
+                    {
+                        EnablePush = value == 1 ? true : false;
+                        return null;
+                    }
+                    break;
+                case SettingId.HeaderTableSize:
+                    if (value >= Settings.Min.HeaderTableSize &&
+                        value <= Settings.Max.HeaderTableSize)
+                    {
+                        HeaderTableSize = value;
+                        return null;
+                    }
+                    break;
+                case SettingId.InitialWindowSize:
+                    if (value >= Settings.Min.InitialWindowSize &&
+                        value <= Settings.Max.InitialWindowSize)
+                    {
+                        InitialWindowSize = value;
+                        return null;
+                    }
+                    break;
+                case SettingId.MaxConcurrentStreams:
+                    if (value >= Settings.Min.MaxConcurrentStreams &&
+                        value <= Settings.Max.MaxConcurrentStreams)
+                    {
+                        MaxConcurrentStreams = value;
+                        return null;
+                    }
+                    break;
+                case SettingId.MaxFrameSize:
+                    if (value >= Settings.Min.MaxFrameSize &&
+                        value <= Settings.Max.MaxFrameSize)
+                    {
+                        MaxFrameSize = value;
+                        return null;
+                    }
+                    break;
+                case SettingId.MaxHeaderListSize:
+                    if (value >= Settings.Min.MaxHeaderListSize &&
+                        value <= Settings.Max.MaxHeaderListSize)
+                    {
+                        MaxHeaderListSize = value;
+                        return null;
+                    }
+                    break;
+                default:
+                    // Ignore unknown settings
+                    return null;
             }
 
-            var hasErr = false;
-            if (value < meta.MinValue) hasErr = true;
-            if (value > meta.MaxValue) hasErr = true;
-            if (!hasErr) return null;
+            // We only get here if the setting is out of bounds.
+            // In other cases the function will return early.
 
             // For InitialWindowSize we must return a FlowControlError according
             // to the spec, for other settings a ProtocolError
@@ -214,21 +241,13 @@ namespace Http2
                 Message = "Invalid value " + value + " for setting with ID " + id,
             };
         }
+    }
 
-        /// <summary>
-        /// Validates all settings in a SettingMap to confirm to their known boundaries.
-        /// Returns an error if settings are invalid or null if ok.
-        /// </summary>
-        public static Http2Error? ValidateSettings(Dictionary<ushort, Setting> settings)
-        {
-            Http2Error? err = null;
-            // Iterate through map until first error occurs
-            foreach (var s in settings)
-            {
-                err = ValidateSetting(s.Key, s.Value.Value);
-                if (err.HasValue) break;
-            };
-            return err;
-        }
+    public struct Setting
+    {
+        /// <summary>ID of the setting</summary>
+        public SettingId ID;
+        /// <summary>Value of the setting</summary>
+        public uint Value;
     }
 }

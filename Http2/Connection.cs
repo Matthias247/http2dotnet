@@ -146,14 +146,16 @@ namespace Http2
                 // input buffer for the write task.
                 // On the client side the preface will still be written before
                 // these settings, since it's handled by the ConnectionWriter.
-                byte[] encodedSettings = null; // TODO: Encode local settings
-                nrUnackedSettings++;
+                var encodedSettingsBuf = new ArraySegment<byte>(
+                    receiveBuffer, 0, LocalSettings.RequiredSize);
+                LocalSettings.EncodeInto(encodedSettingsBuf);
                 await this.Writer.WriteSettings(new FrameHeader{
                     Type = FrameType.Settings,
                     StreamId = 0,
                     Flags = 0,
-                    Length = encodedSettings.Length,
-                }, encodedSettings);
+                    Length = encodedSettingsBuf.Count,
+                }, encodedSettingsBuf);
+                nrUnackedSettings++;
 
                 if (IsServer)
                 {
