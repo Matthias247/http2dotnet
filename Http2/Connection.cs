@@ -502,10 +502,36 @@ namespace Http2
                         Message = "Maximum frame size exceeded",
                     };
                 }
-                await InputStream.ReadAll(new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
-                // TODO: Extract those settings
-                // TODO: Validate those
-                // TODO: Update writer values
+                if (fh.Length % 6 != 0)
+                {
+                    return new Http2Error
+                    {
+                        Type = ErrorType.ConnectionError,
+                        Code = ErrorCode.ProtocolError,
+                        Message = "Invalid SETTINGS frame length",
+                    };
+                }
+
+                // Receive the body of the SETTINGs frame
+                await InputStream.ReadAll(
+                    new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
+
+                // Update the remote settings from that data
+                // This will also validate the settings
+                var err = SettingsUpdater.UpdateSettings(
+                    ref RemoteSettings,
+                    new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
+                if (err != null)
+                {
+                    return err;
+                }
+
+                // Update the writer with new values for the remote settings
+                // As with the current UpdateSettings API we don't see what has
+                // changed we need to overwrite everything.
+                Writer.UpdateMaximumFrameSize((int)RemoteSettings.MaxFrameSize);
+                Writer.UpdateMaximumHeaderTableSize((int)RemoteSettings.HeaderTableSize);
+                // RemoteSettings.MaxHeaderListSize is currently not used
             }
 
             return null;

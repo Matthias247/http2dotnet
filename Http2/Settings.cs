@@ -167,7 +167,7 @@ namespace Http2
         /// <param name="id">The ID of the setting to modify</param>
         /// <param name="value">The new value of the setting</param>
         /// <returns>An error value if the new setting value is not valid</returns>
-        public Http2Error? ModifyById(ushort id, uint value)
+        public Http2Error? UpdateById(ushort id, uint value)
         {
             switch ((SettingId)id)
             {
@@ -243,11 +243,47 @@ namespace Http2
         }
     }
 
-    public struct Setting
+    public static class SettingsUpdater
     {
-        /// <summary>ID of the setting</summary>
-        public SettingId ID;
-        /// <summary>Value of the setting</summary>
-        public uint Value;
+        /// <summary>
+        /// Updates a Settings struct from received setting values.
+        /// This method assumes that the data has a valid length (multiple of
+        /// 6 bytes).
+        /// </summary>
+        /// <param name="settings">The settings to update</param>
+        /// <param name="data">The data which contains the updates</param>
+        public static Http2Error? UpdateSettings(
+            ref Settings settings,
+            ArraySegment<byte> data)
+        {
+            if (data.Count % 6 != 0)
+            {
+                return new Http2Error
+                {
+                    Type = ErrorType.ConnectionError,
+                    Code = ErrorCode.ProtocolError,
+                    Message = "Invalid SETTINGS frame length",
+                };
+            }
+
+            var b = data.Array;
+            for (var o = data.Offset; o <= data.Offset + data.Count; o++)
+            {
+                // Extract ID and value
+                var id =(ushort)(
+                    (b[o + 0] << 8)
+                    | (ushort)b[o + 1]);
+                var value =
+                    ((uint)b[o + 2] << 24)
+                    | ((uint)b[o + 3] << 16)
+                    | ((uint)b[o + 4] << 8)
+                    | (uint)b[o + 5];
+
+                // Update the value
+                settings.UpdateById(id, value);
+            }
+
+            return null;
+        }
     }
 }
