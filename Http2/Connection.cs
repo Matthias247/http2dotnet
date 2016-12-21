@@ -190,7 +190,7 @@ namespace Http2
                             StreamImpl stream = null;
                             lock (shared.Mutex)
                             {
-                                stream = shared.streamMap[err.Value.StreamId];
+                                shared.streamMap.TryGetValue(err.Value.StreamId, out stream);
                             }
 
                             if (stream != null)
@@ -199,8 +199,7 @@ namespace Http2
                                 // Reset the stream locally, which will also
                                 // enqueue a RST_STREAM frame and remove it from
                                 // the map.
-                                // TODO: This won't wait until the reset is done
-                                stream.Reset(err.Value.Code, false);
+                                await stream.Reset(err.Value.Code, false);
                             }
                             else
                             {
@@ -303,7 +302,7 @@ namespace Http2
             StreamImpl stream = null;
             lock (shared.Mutex)
             {
-                stream = shared.streamMap[headers.StreamId];
+                shared.streamMap.TryGetValue(headers.StreamId, out stream);
             }
 
             if (stream != null)
@@ -357,7 +356,7 @@ namespace Http2
             StreamImpl stream = null;
             lock (shared.Mutex)
             {
-                stream = shared.streamMap[fh.StreamId];
+                shared.streamMap.TryGetValue(fh.StreamId, out stream);
             }
 
             if (stream != null)
@@ -494,7 +493,7 @@ namespace Http2
             StreamImpl stream = null;
             lock (shared.Mutex)
             {
-                stream = shared.streamMap[fh.StreamId];
+                shared.streamMap.TryGetValue(fh.StreamId, out stream);
                 if (stream != null)
                 {
                     shared.streamMap.Remove(fh.StreamId);
@@ -503,7 +502,7 @@ namespace Http2
 
             if (stream != null)
             {
-                stream.Reset(resetData.ErrorCode, true);
+                await stream.Reset(resetData.ErrorCode, true);
             }
             return null;
         }

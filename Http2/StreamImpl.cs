@@ -228,11 +228,21 @@ namespace Http2
 
         public void Cancel()
         {
-            Reset(ErrorCode.Cancel, false);
+            var writeResetTask = Reset(ErrorCode.Cancel, false);
+            // We don't really need to care about this task.
+            // Even if it fails the stream will be reset anyway internally.
+            // And failing most likely occured because of a dead connection.
+            // The only helpful thing could be attaching a continuation for
+            // logging
         }
 
-        internal void Reset(ErrorCode errorCode, bool fromRemote)
+        internal ValueTask<ConnectionWriter.WriteResult> Reset(
+            ErrorCode errorCode, bool fromRemote)
         {
+            ValueTask<ConnectionWriter.WriteResult> writeResetTask =
+                new ValueTask<ConnectionWriter.WriteResult>(
+                    ConnectionWriter.WriteResult.Success);
+
             lock (stateMutex)
             {
                 // TODO: If we were IDLE it probably means that the remote doesn't even know
@@ -241,7 +251,7 @@ namespace Http2
                 if (state == StreamState.Reset || state == StreamState.Closed)
                 {
                     // Already reset or fully closed
-                    return;
+                    return writeResetTask;
                 }
                 state = StreamState.Reset;
             }
@@ -259,12 +269,7 @@ namespace Http2
                 {
                     ErrorCode = errorCode
                 };
-                var writeResetTask = connection.Writer.WriteResetStream(fh, resetData);
-                // We don't really need to care about this task.
-                // If it fails the stream will be reset anyway internally.
-                // And failing most likely occured because of a dead connection.
-                // The only helpful thing could be attaching a continuation for
-                // logging
+                writeResetTask = connection.Writer.WriteResetStream(fh, resetData);
             }
             else
             {
@@ -285,6 +290,8 @@ namespace Http2
             readDataPossible.Set();
             readTrailersPossible.Set();
             readHeadersPossible.Set();
+
+            return writeResetTask;
         }
 
         public async ValueTask<StreamReadResult> ReadAsync(ArraySegment<byte> buffer)
