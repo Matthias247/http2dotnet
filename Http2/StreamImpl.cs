@@ -31,7 +31,7 @@ namespace Http2
         private StreamState state;
         private object stateMutex = new object();
 
-        /// <summary>Allows only a single write at a time</summary>
+        /// Allows only a single write at a time
         private SemaphoreSlim writeMutex = new SemaphoreSlim(1);
         private bool headersSent = false;
         private bool dataSent = false;
@@ -50,9 +50,8 @@ namespace Http2
         private int receiveWindow; // Might be superficial since that info is also in RingBuf size
         private RingBuf recvBuf;
 
+        /// Reusable empty list of headers
         private static readonly HeaderField[] EmptyHeaders = new HeaderField[0];
-        private static readonly ArraySegment<byte> EmptyBuffer =
-            new ArraySegment<byte>(new byte[0]);
 
         public StreamImpl(
             Connection connection,
@@ -476,7 +475,7 @@ namespace Http2
 
         public ValueTask<object> CloseAsync()
         {
-            return this.WriteAsync(EmptyBuffer, true);
+            return this.WriteAsync(Constants.EmptyByteArray, true);
         }
 
         public async ValueTask<IEnumerable<HeaderField>> ReadHeaders()

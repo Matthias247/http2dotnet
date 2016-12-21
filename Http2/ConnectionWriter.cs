@@ -33,6 +33,9 @@ namespace Http2
             // As the StreamImpl API does not allow
             // writing concurrent header and data frames
             // it seems superfluos
+            // It might be required if we have a client, and the client headers
+            // are sent from another method which might finish only after the
+            // stream is handed to the user.
             public Queue<WriteRequest> WriteQueue;
             public bool EndOfStreamQueued;
         }
@@ -72,9 +75,6 @@ namespace Http2
         }
 
         private static readonly ArrayPool<byte> _pool = ArrayPool<byte>.Shared;
-
-        private static readonly ArraySegment<byte> EmptyByteArray =
-            new ArraySegment<byte>(new byte[0]);
 
         /// <summary>The associated connection</summary>
         public Connection Connection { get; }
@@ -463,8 +463,8 @@ namespace Http2
             wr.Headers = null;
             // Reset all contained byte arrays so that we leak no
             // data if a pool allocator is used.
-            wr.Data = EmptyByteArray;
-            wr.GoAwayData.DebugData = EmptyByteArray;
+            wr.Data = Constants.EmptyByteArray;
+            wr.GoAwayData.DebugData = Constants.EmptyByteArray;
             wr.Completed.Reset();
         }
 
@@ -858,32 +858,31 @@ namespace Http2
         }
 
         /// <summary>
-        /// Updates the maximum frame size to the new value
+        /// Instruct the writer to user the new settings that the remote required.
         /// </summary>
-        public void UpdateMaximumFrameSize(int maxFrameSize)
+        public void UpdateSettings(Settings remoteSettings)
         {
             // It doesn't really matter if the writer is already closed.
             // We just set the value
             lock (mutex)
             {
-                this.options.MaxFrameSize = maxFrameSize;
-            }
-        }
+                // Remark: Casts are valid, since the settings are validated before
 
-        /// <summary>
-        /// Updates the maximum header table size
-        /// </summary>
-        public void UpdateMaximumHeaderTableSize(int newMaxHeaderTableSize)
-        {
-            lock (mutex)
-            {
-                if (this.hEncoder.DynamicTableSize <= newMaxHeaderTableSize)
+                // Update the maximum frame size
+                this.options.MaxFrameSize = (int)remoteSettings.MaxFrameSize;
+
+                // remoteSettings.MaxHeaderListSize is currently not used
+
+                // Update the maximum HPack table size
+                if (this.hEncoder.DynamicTableSize <= remoteSettings.HeaderTableSize)
                 {
                     // We can just keep the current setting
+                    // There's no need to use a bigger setting, it's just an
+                    // option that is granted to us from the remote.
                 }
                 else
                 {
-                    // We should lower ower header table size and send a notification
+                    // We should lower our header table size and send a notification
                     // about that. However this this currently not supported.
                     // Additionally changing the size would cause a data race, as
                     // it is concurrently used by the writer process.

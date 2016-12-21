@@ -177,9 +177,35 @@ namespace Http2
                         if (err.Value.StreamId == 0)
                         {
                             // The error is a connection error
-                            // TODO: Handle connection error
-                            // TODO: Write a suitable GOAWAY frame and stop the writer
-                            // This should be an urgent GOAWAY thingy
+                            // Write a suitable GOAWAY frame and stop the writer
+                            // TODO: This should be an urgent GOAWAY thingy
+                            var fh = new FrameHeader
+                            {
+                                StreamId = 0,
+                                Type = FrameType.GoAway,
+                                Flags = 0,
+                            };
+                            var goAwayData = new GoAwayFrameData
+                            {
+                                LastStreamId = 0, // TODO: Use the correct one
+                                ErrorCode = err.Value.Code,
+                                DebugData = Constants.EmptyByteArray,
+                            };
+                            // Write the reset frame
+                            // Not interested in the result.
+                            var wres = await Writer.WriteGoAway(fh, goAwayData, true);
+                            if (wres != ConnectionWriter.WriteResult.Success)
+                            {
+                                // Connection close couldn't be queued and performed
+                                // This means we should force close the connection
+                                // TODO: Do that!
+                                // Remark: It looks like this could only fail
+                                // if close has been already queued before, which
+                                // is also ok - no need to force close.
+                                // But in these cases we wouldn't wait until the
+                                // connection is closed but that might only happen
+                                // later on.
+                            }
                             // And stop to read
                             continueRead = false;
                         }
@@ -671,9 +697,7 @@ namespace Http2
                 // Update the writer with new values for the remote settings
                 // As with the current UpdateSettings API we don't see what has
                 // changed we need to overwrite everything.
-                Writer.UpdateMaximumFrameSize((int)RemoteSettings.MaxFrameSize);
-                Writer.UpdateMaximumHeaderTableSize((int)RemoteSettings.HeaderTableSize);
-                // RemoteSettings.MaxHeaderListSize is currently not used
+                Writer.UpdateSettings(RemoteSettings);
 
                 // Set the settings received flag
                 settingsReceived = true;

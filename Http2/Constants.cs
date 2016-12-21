@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System;
+using System.Text;
 
 namespace Http2
 {
@@ -16,6 +17,10 @@ namespace Http2
         /// <summary>The HTTP/2 connection preface bytes</summary>
         public static readonly byte[] ConnectionPrefaceBytes =
             Encoding.ASCII.GetBytes(ConnectionPreface);
+
+        /// <summary>An empty array segment</summery>
+        public static readonly ArraySegment<byte> EmptyByteArray =
+            new ArraySegment<byte>(new byte[0]);
 
         /// <summary>The initial flow control window for connections</summary>
         public const int InitialConnectionWindowSize = 65535;
