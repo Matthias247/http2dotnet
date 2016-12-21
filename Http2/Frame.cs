@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Threading.Tasks;
-using Hpack;
 
 namespace Http2
 {
@@ -376,7 +374,7 @@ namespace Http2
             var o = bytes.Offset;
 
             var increment =
-                ((b[o + 0] & 0x7F) << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o+3];
+                ((b[o+0] & 0x7F) << 24) | (b[o+1] << 16) | (b[o+2] << 8) | b[o+3];
 
             return new WindowUpdateData
             {
@@ -423,7 +421,7 @@ namespace Http2
                 ((uint)b[o + 0] << 24)
                 | ((uint)b[o + 1] << 16)
                 | ((uint)b[o + 2] << 8)
-                | (uint)b[o+3];
+                | (uint)b[o + 3];
 
             return new ResetFrameData
             {
@@ -437,7 +435,7 @@ namespace Http2
     /// </summary>
     public struct GoAwayFrameData
     {
-        public int LastStreamId;
+        public uint LastStreamId;
         public uint ErrorCode;
         public ArraySegment<byte> DebugData;
 
@@ -476,13 +474,13 @@ namespace Http2
                 (((uint)b[o + 0] & 0x7F) << 24)
                 | ((uint)b[o + 1] << 16)
                 | ((uint)b[o + 2] << 8)
-                | (uint)b[o+3];
+                | (uint)b[o + 3];
             var errc =
                 ((uint)b[o + 4] << 24)
                 | ((uint)b[o + 5] << 16)
                 | ((uint)b[o + 6] << 8)
-                | (uint)b[o+7];
-            var debugData = new ArraySegment<byte>(b, o+8, bytes.Count - 8);
+                | (uint)b[o + 7];
+            var debugData = new ArraySegment<byte>(b, o + 8, bytes.Count - 8);
 
             return new GoAwayFrameData
             {

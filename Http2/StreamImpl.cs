@@ -315,10 +315,10 @@ namespace Http2
                         // Only need to do this if the stream has not yet ended
                         if (state != StreamState.Closed && state != StreamState.HalfClosedRemote)
                         {
-                            var freeWindow = recvBuf.Capacity - this.receiveWindow;
-                            if (freeWindow >= (recvBuf.Capacity/2))
+                            var possibleWindowUpdate = recvBuf.Capacity - this.receiveWindow;
+                            if (possibleWindowUpdate >= (recvBuf.Capacity/2))
                             {
-                                windowUpdateAmount = freeWindow;
+                                windowUpdateAmount = possibleWindowUpdate;
                                 receiveWindow += windowUpdateAmount;
                             }
                         }
@@ -515,8 +515,6 @@ namespace Http2
             var wakeupTrailerWaiter = false;
             var removeStream = false;
 
-            // TODO: Need to verify the headers according to given rules
-
             lock (stateMutex)
             {
                 // Header frames are not valid in all states
@@ -562,7 +560,7 @@ namespace Http2
                             {
                                 return new Http2Error
                                 {
-                                    Type = ErrorType.StreamError,
+                                    StreamId = Id,
                                     Code = ErrorCode.ProtocolError,
                                     Message = "Received invalid headers",
                                 };
@@ -578,7 +576,7 @@ namespace Http2
                             // between, so this is simply invalid.
                             return new Http2Error
                             {
-                                Type = ErrorType.StreamError,
+                                StreamId = Id,
                                 Code = ErrorCode.ProtocolError,
                                 Message = "Received trailers without headers",
                             };
@@ -592,7 +590,7 @@ namespace Http2
                             {
                                 return new Http2Error
                                 {
-                                    Type = ErrorType.StreamError,
+                                    StreamId = Id,
                                     Code = ErrorCode.ProtocolError,
                                     Message = "Received trailers without EndOfStream flag",
                                 };
@@ -602,7 +600,7 @@ namespace Http2
                             {
                                 return new Http2Error
                                 {
-                                    Type = ErrorType.StreamError,
+                                    StreamId = Id,
                                     Code = ErrorCode.ProtocolError,
                                     Message = "Received invalid trailers",
                                 };
@@ -640,7 +638,7 @@ namespace Http2
                         return new Http2Error
                         {
                             Code = ErrorCode.StreamClosed,
-                            Type = ErrorType.StreamError,
+                            StreamId = Id,
                             Message = "Received headers for closed stream",
                         };
                     case StreamState.Reset:
@@ -705,9 +703,10 @@ namespace Http2
                 // Must have at least 1 byte
                 if (length < 1)
                 {
+                    // TODO: Check if this is really a steram error
                     return new Http2Error
                     {
-                        Type = ErrorType.StreamError,
+                        StreamId = Id,
                         Code = ErrorCode.FrameSizeError,
                         Message = "Frame is too small to contain padding",
                     };
@@ -719,9 +718,10 @@ namespace Http2
 
                 if (length < 0)
                 {
+                    // TODO: Check if this is a stream error
                     return new Http2Error
                     {
-                        Type = ErrorType.StreamError,
+                        StreamId = Id,
                         Code = ErrorCode.FrameSizeError,
                         Message = "Frame is too small after substracting padding",
                     };
@@ -753,7 +753,7 @@ namespace Http2
                             // alone isn't sufficient.
                             return new Http2Error
                             {
-                                Type = ErrorType.StreamError,
+                                StreamId = Id,
                                 Code = ErrorCode.ProtocolError,
                                 Message = "Received trailers without headers",
                             };
@@ -763,7 +763,7 @@ namespace Http2
                         {
                             return new Http2Error
                             {
-                                Type = ErrorType.StreamError,
+                                StreamId = Id,
                                 Code = ErrorCode.FlowControlError,
                                 Message = "Received window exceeded",
                             };
@@ -796,8 +796,8 @@ namespace Http2
                         // That's not valid
                         return new Http2Error
                         {
+                            StreamId = Id,
                             Code = ErrorCode.StreamClosed,
-                            Type = ErrorType.StreamError,
                             Message = "Received data for closed stream",
                         };
                     case StreamState.Reset:

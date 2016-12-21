@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 
 namespace Http2
 {
@@ -14,24 +13,6 @@ namespace Http2
         InitialWindowSize = 0x4,
         MaxFrameSize = 0x5,
         MaxHeaderListSize = 0x6,
-    }
-
-    internal struct SettingMetaData
-    {
-        /// <summary>
-        /// Initial values for the setting as defined in the HTTP/2 specification
-        /// </summary>
-        public uint InitialValue;
-
-        /// <summary>
-        /// Minimum values for the setting as defined in the HTTP/2 specification
-        /// </summary>
-        public uint MinValue;
-
-        /// <summary>
-        /// Maximum values for the setting as defined in the HTTP/2 specification
-        /// </summary>
-        public uint MaxValue;
     }
 
     /// <summary>
@@ -173,7 +154,7 @@ namespace Http2
             {
                 return new Http2Error
                 {
-                    Type = ErrorType.ConnectionError,
+                    StreamId = 0,
                     Code = ErrorCode.ProtocolError,
                     Message = "Invalid SETTINGS frame length",
                 };
@@ -274,7 +255,7 @@ namespace Http2
 
             return new Http2Error
             {
-                Type = ErrorType.ConnectionError,
+                StreamId = 0,
                 Code = code,
                 Message = "Invalid value " + value + " for setting with ID " + id,
             };

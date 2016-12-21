@@ -910,14 +910,10 @@ namespace Http2
             // Negative or zero flow control window updates are not valid
             if (amount < 1)
             {
-                var errType = streamId == 0
-                    ? ErrorType.ConnectionError
-                    : ErrorType.StreamError;
-
                 return new Http2Error
                 {
                     Code = ErrorCode.ProtocolError,
-                    Type = errType,
+                    StreamId = streamId,
                     Message = "Received an invalid flow control window update",
                 };
             }
@@ -933,8 +929,8 @@ namespace Http2
                     {
                         return new Http2Error
                         {
+                            StreamId = 0,
                             Code = ErrorCode.FlowControlError,
-                            Type = ErrorType.ConnectionError,
                             Message = "Flow control window overflow",
                         };
                     }
@@ -956,7 +952,7 @@ namespace Http2
                                 return new Http2Error
                                 {
                                     Code = ErrorCode.FlowControlError,
-                                    Type = ErrorType.StreamError,
+                                    StreamId = streamId,
                                     Message = "Flow control window overflow",
                                 };
                             }

@@ -10,6 +10,7 @@ namespace Http2
     /// </summary>
     public struct CompleteHeadersFrameData
     {
+        public uint StreamId;
         public PriorityData? Priority;
         public List<HeaderField> Headers;
         public bool EndOfStream;
@@ -70,7 +71,7 @@ namespace Http2
                     {
                         Error = new Http2Error
                         {
-                            Type = ErrorType.ConnectionError,
+                            StreamId = 0,
                             Code = ErrorCode.FrameSizeError,
                             Message = "Maximum frame size exceeded",
                         },
@@ -114,7 +115,7 @@ namespace Http2
                 {
                     Error = new Http2Error
                     {
-                        Type = ErrorType.ConnectionError,
+                        StreamId = 0,
                         Code = ErrorCode.ProtocolError,
                         Message = "Invalid frame content size",
                     },
@@ -137,7 +138,7 @@ namespace Http2
                         {
                             Error = new Http2Error
                             {
-                                Type = ErrorType.ConnectionError,
+                                StreamId = 0,
                                 Code = ErrorCode.ProtocolError,
                                 Message = "Maximum header size exceeded",
                             },
@@ -161,7 +162,7 @@ namespace Http2
                 {
                     Error = new Http2Error
                     {
-                        Type = ErrorType.ConnectionError,
+                        StreamId = 0,
                         Code = ErrorCode.ProtocolError,
                         Message = "HeaderBlockFragment is incomplete",
                     },
@@ -182,7 +183,7 @@ namespace Http2
                     {
                         Error = new Http2Error
                         {
-                            Type = ErrorType.ConnectionError,
+                            StreamId = 0,
                             Code = ErrorCode.ProtocolError,
                             Message = "Invalid continuation frame",
                         },
@@ -212,7 +213,7 @@ namespace Http2
                             {
                                 Error = new Http2Error
                                 {
-                                    Type = ErrorType.ConnectionError,
+                                    StreamId = 0,
                                     Code = ErrorCode.ProtocolError,
                                     Message = "Maximum header size exceeded",
                                 },
@@ -236,7 +237,7 @@ namespace Http2
                     {
                         Error = new Http2Error
                         {
-                            Type = ErrorType.ConnectionError,
+                            StreamId = 0,
                             Code = ErrorCode.ProtocolError,
                             Message = "HeaderBlockFragment is incomplete",
                         },
@@ -249,6 +250,7 @@ namespace Http2
                 Error = null,
                 HeaderData = new CompleteHeadersFrameData
                 {
+                    StreamId = firstHeader.StreamId,
                     Headers = headers,
                     Priority = prioData,
                     EndOfStream = isEndOfStream,

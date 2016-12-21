@@ -58,8 +58,11 @@ namespace Http2
 
         internal SharedData shared;
         byte[] receiveBuffer;
+        /// <summary>Whether the initial settings have been received from the remote</summary>
         bool settingsReceived = false;
         int nrUnackedSettings = 0;
+        /// <summary>Flow control window for the connection</summary>
+        private int connReceiveFlowWindow = Constants.InitialConnectionWindowSize;
         TaskCompletionSource<object> readerFinished = new TaskCompletionSource<object>();
         private Action<Object> StreamListener;
 
@@ -143,7 +146,7 @@ namespace Http2
                 // Enqueue writing the local settings
                 // We do this before reading the preface since enqueuing these few
                 // bytes should not block and is cheap, and we can reuse the
-                // input buffer for the write task.
+                // receiveBuffer for the write task.
                 // On the client side the preface will still be written before
                 // these settings, since it's handled by the ConnectionWriter.
                 var encodedSettingsBuf = new ArraySegment<byte>(
@@ -157,14 +160,68 @@ namespace Http2
                 }, encodedSettingsBuf);
                 nrUnackedSettings++;
 
+                // If this is a server we need to read the preface first,
+                // which is then followed by the remote SETTINGS
                 if (IsServer)
                 {
-                    // If this is a server we need to read the preface first
                     await ClientPreface.ReadAsync(InputStream);
                 }
 
-                // After the client preface the next thing to do is to write the
-                // local settings
+                var continueRead = true;
+                while (continueRead)
+                {
+                    // Read and process a single HTTP/2 frame and it's data
+                    var err = await ReadOneFrame();
+                    if (err != null)
+                    {
+                        if (err.Value.StreamId == 0)
+                        {
+                            // The error is a connection error
+                            // TODO: Handle connection error
+                            // TODO: Write a suitable GOAWAY frame and stop the writer
+                            // This should be an urgent GOAWAY thingy
+                            // And stop to read
+                            continueRead = false;
+                        }
+                        else
+                        {
+                            // The error is a stream error
+                            // Check out if we know a stream with the given ID
+                            StreamImpl stream = null;
+                            lock (shared.Mutex)
+                            {
+                                stream = shared.streamMap[err.Value.StreamId];
+                            }
+
+                            if (stream != null)
+                            {
+                                // The stream is known
+                                // Reset the stream locally, which will also
+                                // enqueue a RST_STREAM frame and remove it from
+                                // the map.
+                                // TODO: This won't wait until the reset is done
+                                stream.Reset(err.Value.Code, false);
+                            }
+                            else
+                            {
+                                // Send a reset frame with the given error code
+                                var fh = new FrameHeader
+                                {
+                                    StreamId = err.Value.StreamId,
+                                    Type = FrameType.ResetStream,
+                                    Flags = 0,
+                                };
+                                var resetData = new ResetFrameData
+                                {
+                                    ErrorCode = err.Value.Code,
+                                };
+                                // Write the reset frame
+                                // Not interested in the result.
+                                await Writer.WriteResetStream(fh, resetData);
+                            }
+                        }
+                    }
+                }
             }
             catch (Exception e)
             {
@@ -181,17 +238,22 @@ namespace Http2
             readerFinished.TrySetResult(null);
         }
 
-        private async ValueTask<Http2Error?> ReadOnce()
+        private async ValueTask<Http2Error?> ReadOneFrame()
         {
             var fh = await FrameHeader.ReceiveAsync(InputStream, receiveBuffer);
 
-            // As a server the first thing that we need to receive after the preface
+            // The first thing that we need to receive after the preface
             // is a SETTINGS frame without ACK flag
-            if (IsServer && !settingsReceived)
+            if (!settingsReceived)
             {
                 if (fh.Type != FrameType.Settings || (fh.Flags & (byte)SettingsFrameFlags.Ack) != 0)
                 {
-                    // TODO: Handle error
+                    return new Http2Error
+                    {
+                        StreamId = 0,
+                        Code = ErrorCode.ProtocolError,
+                        Message = "Expected SETTINGS frame as first frame",
+                    };
                 }
                 // else handle settings normally
             }
@@ -215,7 +277,7 @@ namespace Http2
                 case FrameType.Continuation:
                     return new Http2Error
                     {
-                        Type = ErrorType.ConnectionError,
+                        StreamId = 0,
                         Code = ErrorCode.ProtocolError,
                         Message = "Unexpected CONTINUATION frame",
                     };
@@ -229,7 +291,7 @@ namespace Http2
                 default:
                     return new Http2Error
                     {
-                        Type = ErrorType.ConnectionError,
+                        StreamId = 0,
                         Code = ErrorCode.ProtocolError,
                         Message = "Unexpected frame type",
                     };
@@ -238,6 +300,22 @@ namespace Http2
 
         private async ValueTask<Http2Error?> HandleHeaders(CompleteHeadersFrameData headers)
         {
+            StreamImpl stream = null;
+            lock (shared.Mutex)
+            {
+                stream = shared.streamMap[headers.StreamId];
+            }
+
+            if (stream != null)
+            {
+                //Delegate processing of the HEADERS frame to the stream
+                return stream.ProcessHeaders(headers);
+            }
+            else
+            {
+                // This might be a new stream - or a protocol error
+            }
+
             return null;
         }
 
@@ -247,7 +325,7 @@ namespace Http2
             {
                 return new Http2Error
                 {
-                    Type = ErrorType.ConnectionError,
+                    StreamId = 0,
                     Code = ErrorCode.ProtocolError,
                     Message = "Received invalid DATA frame header",
                 };
@@ -256,11 +334,25 @@ namespace Http2
             {
                 return new Http2Error
                 {
-                    Type = ErrorType.ConnectionError,
+                    StreamId = 0,
                     Code = ErrorCode.FrameSizeError,
                     Message = "Maximum frame size exceeded",
                 };
             }
+
+            // Check if the data frame exceeds the flow control window for the
+            // connection
+            if (fh.Length > connReceiveFlowWindow)
+            {
+                return new Http2Error
+                {
+                    StreamId = 0,
+                    Code = ErrorCode.FlowControlError,
+                    Message = "Received window exceeded",
+                };
+            }
+            // Decrement the flow control window
+            connReceiveFlowWindow -= fh.Length;
 
             StreamImpl stream = null;
             lock (shared.Mutex)
@@ -271,27 +363,76 @@ namespace Http2
             if (stream != null)
             {
                 //Delegate processing of the DATA frame to the stream
-                return await stream.ProcessData(fh, InputStream, receiveBuffer);
+                var err = await stream.ProcessData(fh, InputStream, receiveBuffer);
+                if (err != null) return err;
             }
             else
             {
                 // The stream for which we received data does not exist :O
-                // TODO: We can have killed it.
-                // But it also may have not be established at all.
-                // In both cases we still need to read the data.
+                // Maybe because we have reset it.
+                // In this case we still need to read the data.
+                // It might also have never been established at all.
+                // But we can only roughly check that
+                // TODO: Check if the StreamId is bigger then the maximum
+                // received or sent one
+
+                // Consume the data by reading it into our receiveBuffer
+                await InputStream.ReadAll(
+                    new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
             }
 
-            // TODO: Send window updates for connection somewhere here
+            // Check if we should sent a window update for the connection
+            var maxWindow = Constants.InitialConnectionWindowSize;
+            var possibleWindowUpdate = maxWindow - connReceiveFlowWindow;
+            var windowUpdateAmount = 0;
+            if (possibleWindowUpdate >= (maxWindow/2))
+            {
+                windowUpdateAmount = possibleWindowUpdate;
+                connReceiveFlowWindow += windowUpdateAmount;
+            }
+
+            if (windowUpdateAmount > 0)
+            {
+                // Send the window update frame for the connection
+                var wfh = new FrameHeader {
+                    StreamId = 0,
+                    Type = FrameType.WindowUpdate,
+                    Flags = 0,
+                };
+
+                var updateData = new WindowUpdateData
+                {
+                    WindowSizeIncrement = windowUpdateAmount,
+                };
+
+                try
+                {
+                    await Writer.WriteWindowUpdate(wfh, updateData);
+                }
+                catch (Exception)
+                {
+                    // We ignore errors on sending window updates since they are
+                    // not important to the reading process
+                    // If the writer encounters an error it will close the connection,
+                    // and we will observe that with the next read failing.
+                }
+            }
+
+            return null;
         }
 
-        private async ValueTask<Http2Error?> HandlePushPromiseFrame(FrameHeader fh)
+        private ValueTask<Http2Error?> HandlePushPromiseFrame(FrameHeader fh)
         {
-            return new Http2Error
-            {
-                Type = ErrorType.ConnectionError,
-                Code = ErrorCode.ProtocolError,
-                Message = "Received unsupported PUSH_PROMISE frame",
-            };
+            // Push promises are not yet supported.
+            // We are sending EnablePush = false to the remote
+            // If we still receive a PUSH_PROMISE frame this is an error.
+            return new ValueTask<Http2Error?>(
+                new Http2Error
+                {
+                    StreamId = 0,
+                    Code = ErrorCode.ProtocolError,
+                    Message = "Received unsupported PUSH_PROMISE frame",
+                });
         }
 
         private async ValueTask<Http2Error?> HandleGoAwayFrame(FrameHeader fh)
@@ -300,7 +441,7 @@ namespace Http2
             {
                 return new Http2Error
                 {
-                    Type = ErrorType.ConnectionError,
+                    StreamId = 0,
                     Code = ErrorCode.ProtocolError,
                     Message = "Received invalid GOAWAY frame header",
                 };
@@ -309,7 +450,7 @@ namespace Http2
             {
                 return new Http2Error
                 {
-                    Type = ErrorType.ConnectionError,
+                    StreamId = 0,
                     Code = ErrorCode.FrameSizeError,
                     Message = "Maximum frame size exceeded",
                 };
@@ -336,7 +477,7 @@ namespace Http2
                 if (fh.Length != ResetFrameData.Size) errc = ErrorCode.FrameSizeError;
                 return new Http2Error
                 {
-                    Type = ErrorType.ConnectionError,
+                    StreamId = 0,
                     Code = errc,
                     Message = "Received invalid RST_STREAM frame header",
                 };
@@ -373,7 +514,7 @@ namespace Http2
             {
                 return new Http2Error
                 {
-                    Type = ErrorType.ConnectionError,
+                    StreamId = 0,
                     Code = ErrorCode.FrameSizeError,
                     Message = "Received invalid WINDOW_UPDATE frame header",
                 };
@@ -398,7 +539,7 @@ namespace Http2
                 if (fh.Length != 8) errc = ErrorCode.FrameSizeError;
                 return new Http2Error
                 {
-                    Type = ErrorType.ConnectionError,
+                    StreamId = 0,
                     Code = errc,
                     Message = "Received invalid PING frame header",
                 };
@@ -433,7 +574,7 @@ namespace Http2
                 if (fh.Length != PriorityData.Size) errc = ErrorCode.FrameSizeError;
                 return new Http2Error
                 {
-                    Type = ErrorType.ConnectionError,
+                    StreamId = 0,
                     Code = errc,
                     Message = "Received invalid PRIORITY frame header",
                 };
@@ -458,7 +599,7 @@ namespace Http2
                 // SETTINGS frames must use StreamId 0
                 return new Http2Error
                 {
-                    Type = ErrorType.ConnectionError,
+                    StreamId = 0,
                     Code = ErrorCode.ProtocolError,
                     Message = "Received SETTINGS frame with invalid stream ID",
                 };
@@ -471,19 +612,19 @@ namespace Http2
                 {
                     return new Http2Error
                     {
-                        Type = ErrorType.ConnectionError,
+                        StreamId = 0,
                         Code = ErrorCode.ProtocolError,
                         Message = "Received SETTINGS ACK with non-zero length",
                     };
                 }
-                // TODO: Stop potential timer that waits for SETTINGS acks
+                // TODO: Stop potential timer that waits for SETTINGS ACKs
                 // Might need to protect nrUnackedSettings with a mutex
                 nrUnackedSettings--;
                 if (nrUnackedSettings < 0)
                 {
                     return new Http2Error
                     {
-                        Type = ErrorType.ConnectionError,
+                        StreamId = 0,
                         Code = ErrorCode.ProtocolError,
                         Message = "Received unexpected SETTINGS ACK",
                     };
@@ -492,12 +633,12 @@ namespace Http2
             else
             {
                 // Received SETTINGS from the remote side
-                // Read remaining data
+                // Validate frame length before reading the body
                 if (fh.Length > LocalSettings.MaxFrameSize)
                 {
                     return new Http2Error
                     {
-                        Type = ErrorType.ConnectionError,
+                        StreamId = 0,
                         Code = ErrorCode.FrameSizeError,
                         Message = "Maximum frame size exceeded",
                     };
@@ -506,7 +647,7 @@ namespace Http2
                 {
                     return new Http2Error
                     {
-                        Type = ErrorType.ConnectionError,
+                        StreamId = 0,
                         Code = ErrorCode.ProtocolError,
                         Message = "Invalid SETTINGS frame length",
                     };
@@ -531,6 +672,9 @@ namespace Http2
                 Writer.UpdateMaximumFrameSize((int)RemoteSettings.MaxFrameSize);
                 Writer.UpdateMaximumHeaderTableSize((int)RemoteSettings.HeaderTableSize);
                 // RemoteSettings.MaxHeaderListSize is currently not used
+
+                // Set the settings received flag
+                settingsReceived = true;
             }
 
             return null;
@@ -548,7 +692,5 @@ namespace Http2
                 shared.streamMap.Remove(stream.Id);
             }
         }
-
-        // TODO: Somewhere we need to send window update frames for the connection
     }
 }

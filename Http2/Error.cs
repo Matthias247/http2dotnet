@@ -5,22 +5,6 @@ using System.Text;
 namespace Http2
 {
     /// <summary>
-    /// Possible types of HTTP/2 errors
-    /// </summary>
-    public enum ErrorType
-    {
-        /// <summary>
-        /// The error affects the whole connection
-        /// </summary>
-        ConnectionError,
-
-        /// <summary>
-        /// The error only affects a single stream
-        /// </summary>
-        StreamError,
-    }
-
-    /// <summary>
     /// Error codes that are standardized for HTTP/2
     /// </summary>
     public enum ErrorCode : uint
@@ -46,8 +30,23 @@ namespace Http2
     /// </summary>
     public struct Http2Error
     {
-        public ErrorType Type;
+        /// <summary>
+        /// An HTTP/2 error code that will be transmitted to the remote in order
+        /// to describe the error.
+        /// </summary>
         public ErrorCode Code;
+
+        /// <summary>
+        /// The ID of the stream that is affected by the error.
+        /// If the ID is 0 the error is a connection error.
+        /// Otherwise it's a stream error.
+        /// </summary>
+        public uint StreamId;
+
+        /// <summary>
+        /// An optional message that further describes the error for logging
+        /// purposes.
+        /// </summary>
         public string Message;
     }
 
