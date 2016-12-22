@@ -111,10 +111,8 @@ namespace Http2
                 // Check what already has been sent
                 lock (stateMutex)
                 {
-                    // TODO: Check here the state also?
-                    // If we are in a Reset state we might otherwise still try
-                    // to send headers
-                    // TODO: If we put endofstream we might move into other states
+                    // Check if data has already been sent.
+                    // Headers may be only sent in front of all data.
                     if (dataSent)
                     {
                         throw new Exception("Attempted to write headers after data");
@@ -144,6 +142,12 @@ namespace Http2
                                 removeStream = true;
                             }
                             break;
+                        case StreamState.Reset:
+                            throw new StreamResetException();
+                        // TODO: Check if the other stream states are covered
+                        // by the dataSent/headersSent logic.
+                        // At least in order for a stream to be closed headers
+                        // need to bet sent. With push promises it might be different
                     }
                 }
 
@@ -178,10 +182,6 @@ namespace Http2
                 // Check what already has been sent
                 lock (stateMutex)
                 {
-                    // TODO: Check here the state also?
-                    // If we are in a Reset state we might otherwise still try
-                    // to send headers
-                    // TODO: If we put endofstream we might move into other states
                     if (!dataSent)
                     {
                         throw new Exception("Attempted to write trailers without data");
@@ -200,9 +200,10 @@ namespace Http2
                         case StreamState.Idle:
                         case StreamState.ReservedRemote:
                         case StreamState.HalfClosedLocal:
-                        case StreamState.Reset:
                         case StreamState.Closed:
                             throw new Exception("Invalid state for sending trailers");
+                        case StreamState.Reset:
+                            throw new StreamResetException();
                         case StreamState.ReservedLocal:
                             // We can't be in here if we already have data sent
                             throw new Exception("Unexpected state: ReservedLocal after data sent");
@@ -716,11 +717,10 @@ namespace Http2
                 // Must have at least 1 byte
                 if (length < 1)
                 {
-                    // TODO: Check if this is really a steram error
                     return new Http2Error
                     {
-                        StreamId = Id,
-                        Code = ErrorCode.FrameSizeError,
+                        StreamId = 0, // This is a connection error
+                        Code = ErrorCode.ProtocolError,
                         Message = "Frame is too small to contain padding",
                     };
                 }
@@ -731,11 +731,10 @@ namespace Http2
 
                 if (length < 0)
                 {
-                    // TODO: Check if this is a stream error
                     return new Http2Error
                     {
-                        StreamId = Id,
-                        Code = ErrorCode.FrameSizeError,
+                        StreamId = 0, // This is a connection error
+                        Code = ErrorCode.ProtocolError,
                         Message = "Frame is too small after substracting padding",
                     };
                 }

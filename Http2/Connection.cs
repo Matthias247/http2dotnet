@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 using Hpack;
 
@@ -50,6 +51,11 @@ namespace Http2
             /// Allows to override settings for the connection
             /// </summary>
             public Settings Settings;
+
+            /// <summary>
+            /// Optional logger
+            /// </summary>
+            public ILogger Logger;
         }
 
         internal struct SharedData
@@ -74,6 +80,7 @@ namespace Http2
         uint lastOutgoingStreamId = 0;
 
         private Func<IStream, bool> StreamListener;
+        internal ILogger logger;
 
         internal ConnectionWriter Writer;
         internal IStreamReader InputStream;
@@ -94,6 +101,7 @@ namespace Http2
         public Connection(Options options)
         {
             IsServer = options.IsServer;
+            logger = options.Logger;
 
             if (!options.Settings.Valid) throw new ArgumentException(nameof(options.Settings));
             LocalSettings = options.Settings;
@@ -142,7 +150,8 @@ namespace Http2
                 (int)LocalSettings.MaxFrameSize,
                 (int)LocalSettings.MaxHeaderListSize,
                 receiveBuffer,
-                options.InputStream
+                options.InputStream,
+                logger
             );
 
             // Start the task that performs the actual reading
@@ -191,7 +200,6 @@ namespace Http2
                         {
                             // The error is a connection error
                             // Write a suitable GOAWAY frame and stop the writer
-                            // TODO: This should be an urgent GOAWAY thingy
                             var fh = new FrameHeader
                             {
                                 StreamId = 0,
@@ -251,6 +259,9 @@ namespace Http2
                                 };
                                 // Write the reset frame
                                 // Not interested in the result.
+                                // If the write fails the connection will get
+                                // closed and we will get the error reported on
+                                // the next read attempt.
                                 await Writer.WriteResetStream(fh, resetData);
                             }
                         }
@@ -278,6 +289,10 @@ namespace Http2
         private async ValueTask<Http2Error?> ReadOneFrame()
         {
             var fh = await FrameHeader.ReceiveAsync(InputStream, receiveBuffer);
+            if (logger != null && logger.IsEnabled(LogLevel.Trace))
+            {
+                logger.LogTrace("recv " + FramePrinter.PrintFrameHeader(fh));
+            }
 
             // The first thing that we need to receive after the preface
             // is a SETTINGS frame without ACK flag
@@ -362,7 +377,7 @@ namespace Http2
             // Remark:
             // The HEADERS might also be trailers for a stream which has existed
             // in the past but which was resetted by us in between.
-            // TODO: If the stream is not remoteInitiated we might handle
+            // TODO: If the stream is not remoteInitiated we might handle this
             // differently. E.g. we should at least check the stream ID against
             // the highest stream ID that we have used up to now.
 

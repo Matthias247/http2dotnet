@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 using Hpack;
 using Http2.Internal;
@@ -13,7 +14,6 @@ namespace Http2
     /// <summary>
     /// The task that writes to the connection
     /// </summary>
-    // TODO: This is only public for testing purposes
     public class ConnectionWriter
     {
         /// <summary>
@@ -206,7 +206,6 @@ namespace Http2
             {
                 closed = true;
                 // Fail pending writes that are still queued up
-                // TODO: Is that safe inside the lock?
                 FinishAllOutstandingWritesLocked();
             }
             _pool.Return(this.outBuf);
@@ -245,7 +244,6 @@ namespace Http2
             // Look if there are writes necessary for the connection queue
             // Connection related writes are prioritized against
             // stream related writes
-            // TODO: Check if that's really always the case
             if (this.WriteQueue.Count > 0)
             {
                 var writeRequest = this.WriteQueue.Dequeue();
@@ -316,6 +314,13 @@ namespace Http2
         private async ValueTask<object> ProcessWriteRequestAsync(
             WriteRequest wr, int maxFrameSize)
         {
+            // Log the outgoing frame
+            if (Connection.logger != null && Connection.logger.IsEnabled(LogLevel.Trace))
+            {
+                Connection.logger.LogTrace(
+                    "send " + FramePrinter.PrintFrameHeader(wr.Header));
+            }
+
             // TODO: In general we SHOULD check whether the data payload exceeds the
             // maximum frame size. It is just copied at the moment
             // However in general that won't fail, as the maxFrameSize is bigger
@@ -369,7 +374,7 @@ namespace Http2
                 // data anymore
                 if (wr.Header.HasEndOfStreamFlag)
                 {
-                    lock (mutex) // TODO: This messy
+                    lock (mutex)
                     {
                         RemoveStreamLocked(wr.Header.StreamId);
                     }
@@ -616,7 +621,8 @@ namespace Http2
         /// </summary>
         private async ValueTask<object> WriteDataFrameAsync(WriteRequest wr)
         {
-            // TODO: Check whether padding flag is set and either throw, reset it or handle it
+            // Reset the padding flag. Padding is not supported
+            wr.Header.Flags = (byte)((wr.Header.Flags & ~((uint)DataFrameFlags.Padded)) & 0xFF);
             wr.Header.Length = wr.Data.Count;
             var headerView = new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize);
             wr.Header.EncodeInto(headerView);
@@ -761,8 +767,8 @@ namespace Http2
                 else
                 {
                     isContinuation = true;
-                    // TODO: Might not be the best way to create a slice,
-                    // as that might allocate without need
+                    // TODO: This might not be the best way to create a slice,
+                    // as that might allocate without need. However it works.
                     headers = wr.Headers.Skip(sentHeaders);
                 }
             }

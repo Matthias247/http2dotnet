@@ -48,7 +48,7 @@ namespace Http2
         public static string PrintFrameHeader(FrameHeader h)
         {
             var b = new StringBuilder();
-            b.Append($"type={ FrameTypeString(h.Type)} flags=[");
+            b.Append($"{ FrameTypeString(h.Type)} flags=[");
             AddFlags(b, h);
             b.Append("] streamId=0x");
             b.Append(h.StreamId.ToString("x8"));

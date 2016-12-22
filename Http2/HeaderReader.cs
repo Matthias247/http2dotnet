@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Hpack;
 
 namespace Http2
@@ -36,12 +37,14 @@ namespace Http2
         Decoder hpackDecoder;
         byte[] buffer;
         IStreamReader reader;
+        ILogger logger;
 
         public HeaderReader(
             Decoder hpackDecoder,
             int maxFrameSize, int maxHeaderFieldsSize,
             byte[] buffer,
-            IStreamReader reader
+            IStreamReader reader,
+            ILogger logger
         )
         {
             this.reader = reader;
@@ -49,6 +52,7 @@ namespace Http2
             this.buffer = buffer;
             this.maxFrameSize = maxFrameSize;
             this.maxHeaderFieldsSize = maxHeaderFieldsSize;
+            this.logger = logger;
 
             if (buffer == null || buffer.Length < maxFrameSize)
                 throw new ArgumentException(nameof(buffer));
@@ -174,6 +178,10 @@ namespace Http2
                 // Read the next frame header
                 // This must be a continuation frame
                 var contHeader = await FrameHeader.ReceiveAsync(reader, buffer);
+                if (logger != null && logger.IsEnabled(LogLevel.Trace))
+                {
+                    logger.LogTrace("recv " + FramePrinter.PrintFrameHeader(contHeader));
+                }
                 if (contHeader.Type != FrameType.Continuation
                     || contHeader.StreamId != firstHeader.StreamId
                     || contHeader.Length > maxFrameSize
