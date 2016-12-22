@@ -95,7 +95,8 @@ namespace Http2
         {
             IsServer = options.IsServer;
 
-            LocalSettings = options.Settings; // TODO: Validate
+            if (!options.Settings.Valid) throw new ArgumentException(nameof(options.Settings));
+            LocalSettings = options.Settings;
             // Disable server push as it's not supported.
             // Disabling it here is easier than wanting a custom config from the
             // user which disables it.
@@ -204,21 +205,14 @@ namespace Http2
                                 DebugData = Constants.EmptyByteArray,
                             };
                             // Write the reset frame
-                            // Not interested in the result.
-                            var wres = await Writer.WriteGoAway(fh, goAwayData, true);
-                            if (wres != ConnectionWriter.WriteResult.Success)
-                            {
-                                // Connection close couldn't be queued and performed
-                                // This means we should force close the connection
-                                // TODO: Do that!
-                                // Remark: It looks like this could only fail
-                                // if close has been already queued before, which
-                                // is also ok - no need to force close.
-                                // But in these cases we wouldn't wait until the
-                                // connection is closed but that might only happen
-                                // later on.
-                            }
-                            // And stop to read
+                            await Writer.WriteGoAway(fh, goAwayData, true);
+                            // We are not interested in the result of this.
+                            // If the connection close couldn't be queued and
+                            // performed then the the close was already initiated
+                            // or performed before and the connection is in the
+                            // process of shutting down.
+
+                            // Stop to read
                             continueRead = false;
                         }
                         else
@@ -508,7 +502,7 @@ namespace Http2
                 // It might also have never been established at all.
                 // But we can only roughly check that
                 // TODO: Check if the StreamId is bigger then the maximum
-                // received or sent one
+                // received or sent one - potentially send a reset frame
 
                 // Consume the data by reading it into our receiveBuffer
                 await InputStream.ReadAll(

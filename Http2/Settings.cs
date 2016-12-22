@@ -181,6 +181,42 @@ namespace Http2
         }
 
         /// <summary>
+        /// Indicates whether settings are within valid bounds
+        /// </summary>
+        public bool Valid
+        {
+            get
+            {
+                if (HeaderTableSize < Min.HeaderTableSize ||
+                    HeaderTableSize > Max.HeaderTableSize)
+                {
+                    return false;
+                }
+                if (InitialWindowSize < Min.InitialWindowSize ||
+                    InitialWindowSize > Max.InitialWindowSize)
+                {
+                    return false;
+                }
+                if (MaxConcurrentStreams < Min.MaxConcurrentStreams ||
+                    MaxConcurrentStreams > Max.MaxConcurrentStreams)
+                {
+                    return false;
+                }
+                if (MaxFrameSize < Min.MaxFrameSize ||
+                    MaxFrameSize > Max.MaxFrameSize)
+                {
+                    return false;
+                }
+                if (MaxHeaderListSize < Min.MaxHeaderListSize ||
+                    MaxHeaderListSize > Max.MaxHeaderListSize)
+                {
+                    return false;
+                }
+                return true;
+            }
+        }
+
+        /// <summary>
         /// Modifies the value of setting with the given ID to the new value.
         /// </summary>
         /// <param name="id">The ID of the setting to modify</param>

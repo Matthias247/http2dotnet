@@ -38,7 +38,9 @@ namespace Http2
 
         private bool headersReceived = false;
         private bool dataReceived = false;
-        private bool trailersReceived = false;
+        // A trailersReceived field is not necessary, since receiving trailers
+        // moves the state to HalfClosedRemote
+
         private List<HeaderField> inHeaders;
         private List<HeaderField> inTrailers;
 
@@ -617,7 +619,6 @@ namespace Http2
                                     Message = "Received invalid trailers",
                                 };
                             }
-                            trailersReceived = true;
                             wakeupTrailerWaiter = true;
                             inTrailers = headers.Headers;
                         }
