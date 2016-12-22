@@ -57,8 +57,6 @@ namespace Http2
             Connection connection,
             uint streamId,
             StreamState state,
-            List<HeaderField> receivedHeaders,
-            int recvBufSize,
             int receiveWindow)
         {
             this.connection = connection;
@@ -70,10 +68,8 @@ namespace Http2
             // In case we are on the client side we are idle and need
             // to send headers before doing anything.
             this.state = state;
-            this.inHeaders = receivedHeaders;
-            if (receivedHeaders != null) headersReceived = true;
             this.receiveWindow = receiveWindow;
-            this.recvBuf = new RingBuf(recvBufSize);
+            this.recvBuf = new RingBuf(receiveWindow);
         }
 
         private async ValueTask<object> SendHeaders(
@@ -244,9 +240,6 @@ namespace Http2
 
             lock (stateMutex)
             {
-                // TODO: If we were IDLE it probably means that the remote doesn't even know
-                // of us. And we don't need to send reset.
-
                 if (state == StreamState.Reset || state == StreamState.Closed)
                 {
                     // Already reset or fully closed
@@ -254,6 +247,13 @@ namespace Http2
                 }
                 state = StreamState.Reset;
             }
+
+            // Remark: Even if we are here in IDLE state we need to send the
+            // RESET frame. The reason for this is that if we receive a header
+            // for a new stream which is invalid a StreamImpl instance will be
+            // created and put into IDLE state. The header processing will fail
+            // and Reset will get called. As the remote thinks we are in Open
+            // state we must send a RST_STREAM.
 
             if (!fromRemote)
             {
@@ -530,7 +530,13 @@ namespace Http2
                     case StreamState.ReservedRemote:
                         // Push promises are currently not implemented
                         // So this needs to be reviewed later on
-                        throw new NotImplementedException();
+                        // Currently we should never encounter this state
+                        return new Http2Error
+                        {
+                            StreamId = Id,
+                            Code = ErrorCode.InternalError,
+                            Message = "Received header frame in uncovered push promise state",
+                        };
                     case StreamState.Idle:
                     case StreamState.Open:
                     case StreamState.HalfClosedLocal:

@@ -36,8 +36,10 @@ namespace Http2
             /// <summary>
             /// The function that should be called whenever a new stream is
             /// opened by the remote peer.
+            /// The function should return true if it wants to handle the new
+            /// stream and false otherwise.
             /// </summary>
-            public Action<Object> StreamListener;
+            public Func<IStream, bool> StreamListener;
 
             /// <summary>
             /// Strategy for applying huffman encoding on outgoing headers
@@ -63,11 +65,19 @@ namespace Http2
         int nrUnackedSettings = 0;
         /// <summary>Flow control window for the connection</summary>
         private int connReceiveFlowWindow = Constants.InitialConnectionWindowSize;
-        TaskCompletionSource<object> readerFinished = new TaskCompletionSource<object>();
-        private Action<Object> StreamListener;
+
+        /// The last and maximum stream ID that was received from the remote.
+        /// 0 means we never received anything
+        uint lastIncomingStreamId = 0;
+        /// The last and maximum stream ID that was sent to the remote.
+        /// 0 means we never sent anything
+        uint lastOutgoingStreamId = 0;
+
+        private Func<IStream, bool> StreamListener;
 
         internal ConnectionWriter Writer;
         internal IStreamReader InputStream;
+        TaskCompletionSource<object> connectionDoneTcs = new TaskCompletionSource<object>();
         internal HeaderReader HeaderReader;
         internal Settings LocalSettings;
         internal Settings RemoteSettings = Settings.Default;
@@ -95,17 +105,19 @@ namespace Http2
 
             if (options.InputStream == null) throw new ArgumentNullException(nameof(options.InputStream));
             if (options.OutputStream == null) throw new ArgumentNullException(nameof(options.OutputStream));
+            this.InputStream = options.InputStream;
+
             if (options.IsServer && options.StreamListener == null)
                 throw new ArgumentNullException(nameof(options.StreamListener));
             StreamListener = options.StreamListener;
 
-            this.InputStream = options.InputStream;
             receiveBuffer = new byte[LocalSettings.MaxFrameSize + FrameHeader.HeaderSize];
 
             // Initialize shared data
             shared.Mutex = new object();
             shared.streamMap = new Dictionary<uint, StreamImpl>();
 
+            // Start the writing task
             Writer = new ConnectionWriter(
                 this, options.OutputStream,
                 new ConnectionWriter.Options
@@ -187,7 +199,7 @@ namespace Http2
                             };
                             var goAwayData = new GoAwayFrameData
                             {
-                                LastStreamId = 0, // TODO: Use the correct one
+                                LastStreamId = lastIncomingStreamId,
                                 ErrorCode = err.Value.Code,
                                 DebugData = Constants.EmptyByteArray,
                             };
@@ -251,19 +263,22 @@ namespace Http2
                     }
                 }
             }
-            catch (Exception e)
+            catch (Exception)
             {
                 // We will get here in all cases where the reading task encounters
                 // an exception.
                 // As most exceptions are gracefully handled the remaining ones
                 // will only be cases where the reader fails.
-                readerFinished.SetException(e);
+                
+                // Shutdown the writer. No need for GOAWAY, since we are dead.
+                await Writer.CloseNow();
             }
 
-            // This will only succeed if we don't land in the catch block before
-            // It's just more readable to put this here instead of at the end
-            // of the try block
-            readerFinished.TrySetResult(null);
+            // Wait until the Writer has closed
+            await Writer.Done;
+
+            // Mark the connection as finished
+            connectionDoneTcs.SetResult(null);
         }
 
         private async ValueTask<Http2Error?> ReadOneFrame()
@@ -336,12 +351,103 @@ namespace Http2
 
             if (stream != null)
             {
-                //Delegate processing of the HEADERS frame to the stream
+                //Delegate processing of the HEADERS frame to the existing stream
                 return stream.ProcessHeaders(headers);
             }
-            else
+
+            // This might be a new stream - or a protocol error
+            var isServerInitiated = headers.StreamId % 2 == 0;
+            var isRemoteInitiated =
+                (IsServer && !isServerInitiated) || (!IsServer && isServerInitiated);
+
+            var isValidNewStream =
+                IsServer && // As a client don't accept HEADERS as a way to create a new stream
+                isRemoteInitiated &&
+                (headers.StreamId <= lastIncomingStreamId);
+
+            // Remark:
+            // The HEADERS might also be trailers for a stream which has existed
+            // in the past but which was resetted by us in between.
+            // TODO: If the stream is not remoteInitiated we might handle
+            // differently. E.g. we should at least check the stream ID against
+            // the highest stream ID that we have used up to now.
+
+            if (!isValidNewStream)
             {
-                // This might be a new stream - or a protocol error
+                // Return an error, which will trigger sending RST_STREAM
+                return new Http2Error
+                {
+                    StreamId = headers.StreamId,
+                    Code = ErrorCode.RefusedStream,
+                    Message = "Refusing HEADERS which don't open a new stream",
+                };
+            }
+
+            lastIncomingStreamId = headers.StreamId;
+
+            // Check max concurrent streams
+            lock (shared.Mutex)
+            {
+                if (shared.streamMap.Count + 1 > LocalSettings.MaxConcurrentStreams)
+                {
+                    // Return an error which will trigger a reset frame for
+                    // the new stream
+                    return new Http2Error
+                    {
+                        StreamId = headers.StreamId,
+                        Code = ErrorCode.RefusedStream,
+                        Message = "Refusing stream due to max concurrent streams",
+                    };
+                }
+            }
+
+            // Create a new stream for that ID
+            var newStream = new StreamImpl(
+                this, headers.StreamId, StreamState.Idle,
+                (int)LocalSettings.InitialWindowSize);
+
+            // Add the stream to our map
+            // The map might have changed between the check in this
+            // But it only can shrink - because we add streams here and only
+            // remove them from other tasks.
+            lock (shared.Mutex)
+            {
+                shared.streamMap[headers.StreamId] = newStream;
+            }
+
+            // Register that stream at the writer
+            if (!Writer.RegisterStream(headers.StreamId, (int)RemoteSettings.InitialWindowSize))
+            {
+                // We can't register the stream at the writer
+                // This can happen if the writer is already closed
+                // Return a connection error, since we can't proceed that way.
+                // The stream will get properly reset, since it's registered in
+                // the streamMap
+                return new Http2Error
+                {
+                    StreamId = 0,
+                    Code = ErrorCode.InternalError,
+                    Message = "Can't register stream at writer",
+                };
+            }
+
+            // Let the new stream process the headers
+            // This will move it from Idle state to Open
+            var err = newStream.ProcessHeaders(headers);
+            if (err != null)
+            {
+                // Return the error - This will either reset the stream or
+                // the connection. No need to pass that dead stream up to
+                // the user
+                return err;
+            }
+
+            var handledByUser = StreamListener(newStream);
+            if (!handledByUser)
+            {
+                // The user isn't interested in the stream.
+                // Therefore we reset it
+                await newStream.Reset(ErrorCode.RefusedStream, false);
             }
 
             return null;
@@ -379,7 +485,7 @@ namespace Http2
                     Message = "Received window exceeded",
                 };
             }
-            // Decrement the flow control window
+            // Decrement the flow control window of the connection
             connReceiveFlowWindow -= fh.Length;
 
             StreamImpl stream = null;
@@ -409,7 +515,7 @@ namespace Http2
                     new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
             }
 
-            // Check if we should sent a window update for the connection
+            // Check if we should send a window update for the connection
             var maxWindow = Constants.InitialConnectionWindowSize;
             var possibleWindowUpdate = maxWindow - connReceiveFlowWindow;
             var windowUpdateAmount = 0;

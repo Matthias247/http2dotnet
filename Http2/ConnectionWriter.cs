@@ -199,17 +199,7 @@ namespace Http2
 
             // Close the connection if that hasn't happened yet
             // That's even necessary if the an error happened
-            if (Interlocked.CompareExchange(ref closeConnectionIssued, 1, 0) == 0)
-            {
-                try
-                {
-                    await outStream.CloseAsync();
-                }
-                catch (Exception)
-                {
-                    // There's not really something meaningfull we can do here
-                }
-            }
+            await CloseNow();
 
             // Set the closed flag which will avoid new write items to be added
             lock (mutex)
@@ -222,6 +212,28 @@ namespace Http2
             _pool.Return(this.outBuf);
             this.outBuf = null;
             doneTcs.SetResult(true);
+        }
+
+        /// <summary>
+        /// Forces closing the connection immediatly.
+        /// Pending write tasks will fail.
+        /// </summary>
+        public async ValueTask<object> CloseNow()
+        {
+            if (Interlocked.CompareExchange(ref closeConnectionIssued, 1, 0) == 0)
+            {
+                try
+                {
+                    await outStream.CloseAsync();
+                }
+                catch (Exception)
+                {
+                    // There's not really something meaningfull we can do here
+                }
+            }
+            // TODO: If this is called externally we need to wake up the
+            // writer in order to make it return
+            return null;
         }
 
         /// <summary>
