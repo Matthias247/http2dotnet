@@ -229,9 +229,22 @@ namespace Http2
                 {
                     // There's not really something meaningfull we can do here
                 }
+
+                // If the writer is blocked (waits on wakeupWriter) we need to wake
+                // it up. Otherwise it wouldn't notice that the connection is dead
+                // We also set closeRequested, because otherwise if it's not set and
+                // there is no outstanding write request the writer would go to sleep
+                // again.
+                // If there is a write request the writer will not close immediatly
+                // but try to write that request. Won't matter if the writes fails,
+                // since it's intended to get out of the main working loop - with or
+                // without an exception.
+                lock (mutex)
+                {
+                    this.closeRequested = true;
+                }
+                wakeupWriter.Set();
             }
-            // TODO: If this is called externally we need to wake up the
-            // writer in order to make it return
             return null;
         }
 
