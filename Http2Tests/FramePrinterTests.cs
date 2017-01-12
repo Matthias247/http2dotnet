@@ -19,7 +19,7 @@ namespace Http2Tests
                 Length = 999,
             };
             var res = FramePrinter.PrintFrameHeader(fh);
-            Assert.Equal("type=Continuation flags=[EndOfHeaders] streamId=0x00000123 length=999", res);
+            Assert.Equal("Continuation flags=[EndOfHeaders] streamId=0x00000123 length=999", res);
         }
 
         [Fact]
@@ -33,7 +33,7 @@ namespace Http2Tests
                 Length = 999,
             };
             var res = FramePrinter.PrintFrameHeader(fh);
-            Assert.Equal("type=Data flags=[EndOfStream,Padded] streamId=0x00000123 length=999", res);
+            Assert.Equal("Data flags=[EndOfStream,Padded] streamId=0x00000123 length=999", res);
         }
 
         [Fact]
@@ -47,7 +47,7 @@ namespace Http2Tests
                 Length = 999,
             };
             var res = FramePrinter.PrintFrameHeader(fh);
-            Assert.Equal("type=ResetStream flags=[] streamId=0x7fffffff length=999", res);
+            Assert.Equal("ResetStream flags=[] streamId=0x7fffffff length=999", res);
         }
 
         [Fact]
@@ -61,7 +61,7 @@ namespace Http2Tests
                 Length = 999,
             };
             var res = FramePrinter.PrintFrameHeader(fh);
-            Assert.Equal("type=ResetStream flags=[0x43] streamId=0x00000123 length=999", res);
+            Assert.Equal("ResetStream flags=[0x43] streamId=0x00000123 length=999", res);
         }
     }
 }

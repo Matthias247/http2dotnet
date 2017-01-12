@@ -1,6 +1,6 @@
 {
-  "projects": [ "Hpack", "Http2", "HpackTests", "Http2Tests" ],
+  "projects": [ "Hpack", "Http2", "HpackTests", "Http2Tests", "ExampleServer" ],
   "sdk": {
-    "version": "1.0.0-preview4-004110"
+    "version": "1.0.0-preview4-004233"
   }
 }
