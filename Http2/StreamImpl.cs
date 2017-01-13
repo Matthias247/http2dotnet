@@ -249,6 +249,11 @@ namespace Http2
                     return writeResetTask;
                 }
                 state = StreamState.Reset;
+                if (recvBuf != null)
+                {
+                    recvBuf.Dispose();
+                    recvBuf = null;
+                }
             }
 
             // Remark: Even if we are here in IDLE state we need to send the
@@ -341,11 +346,21 @@ namespace Http2
                         };
                         hasResult = true;
 
-                        // If all data was consumed the next read must be blocked
-                        // until more data comes in or the stream gets closed or reset
-                        if (!streamClosedFromRemote && recvBuf.Available == 0)
+                        if (recvBuf.Available == 0)
                         {
-                            readDataPossible.Reset();
+                            if (!streamClosedFromRemote)
+                            {
+                                // If all data was consumed the next read must be blocked
+                                // until more data comes in or the stream gets closed or reset
+                                readDataPossible.Reset();
+                            }
+                            else
+                            {
+                                // The stream was closed, which means no more data will follow
+                                // In this case we can dispose the receive buffer.
+                                recvBuf.Dispose();
+                                recvBuf = null;
+                            }
                         }
                     }
                     else if (streamClosedFromRemote)

@@ -67,6 +67,8 @@ class Program
     {
         var connectionId = 0;
 
+        var settings = Settings.Default;
+
         while (true)
         {
             // Accept TCP sockets
@@ -80,7 +82,7 @@ class Program
                 InputStream = wrappedStreams.Reader,
                 OutputStream = wrappedStreams.Writer,
                 IsServer = true,
-                Settings = Settings.Default,
+                Settings = settings,
                 StreamListener = AcceptIncomingStream,
                 Logger = logProvider.CreateLogger("HTTP2Conn" + connectionId),
             });
