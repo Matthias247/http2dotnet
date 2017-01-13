@@ -32,8 +32,8 @@ namespace Http2
             public CompleteHeadersFrameData HeaderData;
         }
 
-        int maxFrameSize;
-        int maxHeaderFieldsSize;
+        uint maxFrameSize;
+        uint maxHeaderFieldsSize;
         Decoder hpackDecoder;
         byte[] buffer;
         IStreamReader reader;
@@ -41,7 +41,7 @@ namespace Http2
 
         public HeaderReader(
             Decoder hpackDecoder,
-            int maxFrameSize, int maxHeaderFieldsSize,
+            uint maxFrameSize, uint maxHeaderFieldsSize,
             byte[] buffer,
             IStreamReader reader,
             ILogger logger
@@ -83,7 +83,7 @@ namespace Http2
             }
 
             PriorityData? prioData = null;
-            var totalHeadersSize = 0;
+            var totalHeadersSize = 0u;
             var headers = new List<HeaderField>();
             var initialFlags = firstHeader.Flags;
 
@@ -135,7 +135,7 @@ namespace Http2
                 contentLen -= consumed;
                 if (hpackDecoder.Done)
                 {
-                    totalHeadersSize += hpackDecoder.HeaderSize;
+                    totalHeadersSize += (uint)hpackDecoder.HeaderSize;
                     if (totalHeadersSize > maxHeaderFieldsSize)
                     {
                         return new Result
@@ -214,7 +214,7 @@ namespace Http2
                     contentLen -= consumed;
                     if (hpackDecoder.Done)
                     {
-                        totalHeadersSize += hpackDecoder.HeaderSize;
+                        totalHeadersSize += (uint)hpackDecoder.HeaderSize;
                         if (totalHeadersSize > maxHeaderFieldsSize)
                         {
                             return new Result

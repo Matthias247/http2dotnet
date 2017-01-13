@@ -68,7 +68,6 @@ namespace Hpack
 
             if (this._lengthDecoder.Done)
             {
-                Console.WriteLine("done");
                 var len = this._lengthDecoder.Result;
                 if (len > this._maxLength)
                     throw new Exception("Maximum string length exceeded");
@@ -81,7 +80,6 @@ namespace Hpack
             }
             else
             {
-                Console.WriteLine("not done");
                 // Need more input data to decode octetLength
                 return consumed;
             }

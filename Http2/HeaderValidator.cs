@@ -42,7 +42,7 @@ namespace Http2
         {
             // Search and validate all required pseudo headers here
             int nrMethod = 0;
-            int nrSchema = 0;
+            int nrScheme = 0;
             int nrAuthority = 0;
             int nrPath = 0;
             int nrPseudoFields = 0;
@@ -69,8 +69,8 @@ namespace Http2
                     case ":authority":
                         nrAuthority++;
                         break;
-                    case ":schema":
-                        nrSchema++;
+                    case ":scheme":
+                        nrScheme++;
                         break;
                     default:
                         return HeaderValidationResult.ErrorInvalidPseudoHeader;
@@ -87,7 +87,7 @@ namespace Http2
 
             // Check if all relevant fields are set exactly one time
             // authority might be empty for asterisk requests
-            if (nrMethod != 1 || nrSchema != 1 || nrPath != 1 ||(nrAuthority > 1))
+            if (nrMethod != 1 || nrScheme != 1 || nrPath != 1 ||(nrAuthority > 1))
             {
                 return HeaderValidationResult.ErrorInvalidPseudoHeader;
             }
@@ -121,7 +121,9 @@ namespace Http2
                     case ":status":
                         nrStatus++;
                         // Validate that the status code is a 3digit number
-                        if (hf.Value == null || hf.Value.Length != 3 || hf.Value.Any(char.IsNumber))
+                        if (hf.Value == null ||
+                            hf.Value.Length != 3 ||
+                            hf.Value.Any(c => !char.IsNumber(c)))
                         {
                             return HeaderValidationResult.ErrorInvalidPseudoHeaderFieldValue;
                         }

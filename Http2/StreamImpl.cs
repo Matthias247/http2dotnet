@@ -147,7 +147,7 @@ namespace Http2
                         // TODO: Check if the other stream states are covered
                         // by the dataSent/headersSent logic.
                         // At least in order for a stream to be closed headers
-                        // need to bet sent. With push promises it might be different
+                        // need to be sent. With push promises it might be different
                     }
                 }
 
@@ -313,16 +313,19 @@ namespace Http2
                         throw new StreamResetException();
                     }
 
+                    var streamClosedFromRemote =
+                        state == StreamState.Closed || state == StreamState.HalfClosedRemote;
+
                     if (recvBuf != null && recvBuf.Available > 0)
                     {
                         // Copy data from receive buffer to target
                         var toCopy = Math.Min(recvBuf.Available, buffer.Count);
-                        recvBuf.Read(new ArraySegment<byte>(buffer.Array, buffer.Offset, buffer.Count));
+                        recvBuf.Read(new ArraySegment<byte>(buffer.Array, buffer.Offset, toCopy));
 
                         // Calculate whether we should send a window update frame
                         // after the read is complete.
                         // Only need to do this if the stream has not yet ended
-                        if (state != StreamState.Closed && state != StreamState.HalfClosedRemote)
+                        if (!streamClosedFromRemote)
                         {
                             var possibleWindowUpdate = recvBuf.Capacity - this.receiveWindow;
                             if (possibleWindowUpdate >= (recvBuf.Capacity/2))
@@ -337,9 +340,15 @@ namespace Http2
                             EndOfStream = false,
                         };
                         hasResult = true;
-                    }
 
-                    if (state == StreamState.Closed || state == StreamState.HalfClosedRemote)
+                        // If all data was consumed the next read must be blocked
+                        // until more data comes in or the stream gets closed or reset
+                        if (!streamClosedFromRemote && recvBuf.Available == 0)
+                        {
+                            readDataPossible.Reset();
+                        }
+                    }
+                    else if (streamClosedFromRemote)
                     {
                         result = new StreamReadResult{
                             BytesRead = 0,
@@ -347,10 +356,6 @@ namespace Http2
                         };
                         hasResult = true;
                     }
-
-                    // No data and not closed or reset
-                    // Sleep until data arrives or stream is reset
-                    readDataPossible.Reset();
                 }
 
                 if (hasResult)
@@ -390,7 +395,10 @@ namespace Http2
             catch (Exception)
             {
                 // We ignore errors on sending window updates since they are
-                // not important to the reading process
+                // not important to the reading task, which is the request
+                // handling task.
+                // An error means the writer is dead, which again means
+                // window updates are no longer necessary
             }
 
             return null;
@@ -747,27 +755,29 @@ namespace Http2
 
             lock (stateMutex)
             {
-                // Header frames are not valid in all states
+                // Data frames are not valid in all states
                 switch (state)
                 {
                     case StreamState.ReservedLocal:
                     case StreamState.ReservedRemote:
                         // Push promises are currently not implemented
-                        // So this needs to be reviewed later on
+                        // At the moment these should already been
+                        // rejected in the Connection.
+                        // This needs to be reviewed later on
                         throw new NotImplementedException();
                     case StreamState.Open:
                     case StreamState.HalfClosedLocal:
-                        if (!dataReceived)
+                        if (! headersReceived)
                         {
                             // Received DATA without HEADERS before.
-                            // As state Open can also mean we only have sent
-                            // headers but not received them checking the state
-                            // alone isn't sufficient.
+                            // State Open can also mean we only have sent
+                            // headers but not received them.
+                            // Therefore checking the state alone isn't sufficient.
                             return new Http2Error
                             {
                                 StreamId = Id,
                                 Code = ErrorCode.ProtocolError,
-                                Message = "Received trailers without headers",
+                                Message = "Received data before headers",
                             };
                         }
                         // Check if the flow control window is exceeded

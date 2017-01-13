@@ -5,6 +5,9 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging.Console;
 using Http2;
 using Hpack;
 
@@ -12,9 +15,12 @@ class Program
 {
     static void Main(string[] args)
     {
+        //var logProvider = new ConsoleLoggerProvider((s, level) => true, true);
+        var logProvider = NullLoggerProvider.Instance;
+        // Create a TCP socket acceptor
         var listener = new TcpListener(IPAddress.Any, 8888);
         listener.Start();
-        Task.Run(() => AcceptTask(listener)).Wait();
+        Task.Run(() => AcceptTask(listener, logProvider)).Wait();
     }
 
     static bool AcceptIncomingStream(IStream stream)
@@ -23,31 +29,48 @@ class Program
         return true;
     }
 
+    static byte[] responseBody = Encoding.ASCII.GetBytes("Hello World!");
+
     static async Task HandleIncomingStream(IStream stream)
     {
         try
         {
             // Read the headers
             var headers = await stream.ReadHeaders();
-            Console.WriteLine(
-                "Method: {0}, Path: {1}",
-                headers.GetMethod(), headers.GetPath());
-            // Read the request body
-            var body = await stream.DrainAsync();
-            Console.WriteLine(Encoding.UTF8.GetString(body));
+            //Console.WriteLine(
+            //    "Method: {0}, Path: {1}",
+            //    headers.GetMethod(), headers.GetPath());
+
+            // Read the request body to the end
+            await stream.DrainAsync();
+            //Console.WriteLine(Encoding.UTF8.GetString(body));
+
+            // Send a response which consists of headers and a payload
+            var responseHeaders = new HeaderField[] {
+                new HeaderField { Name = ":status", Value = "200" },
+                new HeaderField { Name = "abcd", Value = "asdfkljdadfksjllköfds" },
+                new HeaderField { Name = "nextone", Value = "asdfkljdadfksjllköfds" },
+            };
+            await stream.WriteHeaders(responseHeaders, false);
+            await stream.WriteAsync(new ArraySegment<byte>(responseBody), true);
+
+            // Request is fully handled here
         }
         catch (Exception e)
         {
-            Console.WriteLine("Error on stream: {0}", e);
+            Console.WriteLine("Error during handling request: {0}", e.Message);
+            stream.Cancel();
         }
     }
 
-    static async Task AcceptTask(TcpListener listener)
+    static async Task AcceptTask(TcpListener listener, ILoggerProvider logProvider)
     {
+        var connectionId = 0;
+
         while (true)
         {
+            // Accept TCP sockets
             var tcpClient = await listener.AcceptTcpClientAsync();
-            Console.WriteLine("accepted a client");
             var stream = tcpClient.GetStream();
             var wrappedStreams = stream.CreateStreams();
 
@@ -59,7 +82,10 @@ class Program
                 IsServer = true,
                 Settings = Settings.Default,
                 StreamListener = AcceptIncomingStream,
+                Logger = logProvider.CreateLogger("HTTP2Conn" + connectionId),
             });
+
+            connectionId++;
         }
     }
 }
@@ -81,28 +107,55 @@ public static class RequestUtils
         return GetValue(fields, ":path");
     }
 
-    public async static Task<byte[]> DrainAsync(this IStreamReader stream)
+    public async static Task<byte[]> ReadAllBytesAsync(this IStreamReader stream)
     {
         var buf = new byte[2048];
         var s = new System.IO.MemoryStream();
         var bytesRead = 0;
 
+        try
+        {
+            while (true)
+            {
+                var res = await stream.ReadAsync(new ArraySegment<byte>(buf));
+                // Copy the read bytes into the memorystream
+                if (res.BytesRead != 0)
+                {
+                    s.Write(buf, 0, res.BytesRead);
+                    bytesRead += res.BytesRead;
+                }
+
+                if (res.EndOfStream)
+                {
+                    // Return everything that was read so far
+                    // TODO: That might be wrong if this returns the whole backing
+                    // buffer and not only the really read data amount
+                    return s.ToArray();
+                }
+            }
+        }
+        finally
+        {
+            s.Dispose();
+        }
+    }
+
+    public async static Task DrainAsync(this IStreamReader stream)
+    {
+        var buf = new byte[2048];
+        var bytesRead = 0;
+
         while (true)
         {
             var res = await stream.ReadAsync(new ArraySegment<byte>(buf));
-            // Copy the read bytes into the memorystream
             if (res.BytesRead != 0)
             {
-                s.Write(buf, 0, res.BytesRead);
                 bytesRead += res.BytesRead;
             }
 
             if (res.EndOfStream)
             {
-                // Return everything that was read so far
-                // TODO: That might be wrong if this returns the whole backing
-                // buffer and not only the really read data amount
-                return s.ToArray();
+                return;
             }
         }
     }

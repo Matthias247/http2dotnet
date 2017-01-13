@@ -147,8 +147,8 @@ namespace Http2
                     // Use the default options here as long as this is not configurable
                     DynamicTableSizeLimit = (int)LocalSettings.HeaderTableSize,
                 }),
-                (int)LocalSettings.MaxFrameSize,
-                (int)LocalSettings.MaxHeaderListSize,
+                LocalSettings.MaxFrameSize,
+                LocalSettings.MaxHeaderListSize,
                 receiveBuffer,
                 options.InputStream,
                 logger
@@ -198,6 +198,12 @@ namespace Http2
                     {
                         if (err.Value.StreamId == 0)
                         {
+                            // Log the error
+                            if (logger != null && logger.IsEnabled(LogLevel.Error))
+                            {
+                                logger.LogError("Handling connection error {0}", err.Value);
+                            }
+
                             // The error is a connection error
                             // Write a suitable GOAWAY frame and stop the writer
                             var fh = new FrameHeader
@@ -225,6 +231,12 @@ namespace Http2
                         }
                         else
                         {
+                            // Log the error
+                            if (logger != null && logger.IsEnabled(LogLevel.Error))
+                            {
+                                logger.LogError("Handling stream error {0}", err.Value);
+                            }
+
                             // The error is a stream error
                             // Check out if we know a stream with the given ID
                             StreamImpl stream = null;
@@ -274,16 +286,24 @@ namespace Http2
                 // an exception.
                 // As most exceptions are gracefully handled the remaining ones
                 // will only be cases where the reader fails.
-                
-                // Shutdown the writer. No need for GOAWAY, since we are dead.
-                await Writer.CloseNow();
             }
+
+            // Shutdown the writer
+            // If we get here through a read exception there's no need for GOAWAY
+            // If we get here through GoAwayAndClose we double close
+            // TODO: Review that
+            await Writer.CloseNow();
 
             // Wait until the Writer has closed
             await Writer.Done;
 
             // Mark the connection as finished
             connectionDoneTcs.SetResult(null);
+
+            if (logger != null && logger.IsEnabled(LogLevel.Trace))
+            {
+                logger.LogTrace("Connection closed");
+            }
         }
 
         private async ValueTask<Http2Error?> ReadOneFrame()
@@ -372,7 +392,7 @@ namespace Http2
             var isValidNewStream =
                 IsServer && // As a client don't accept HEADERS as a way to create a new stream
                 isRemoteInitiated &&
-                (headers.StreamId <= lastIncomingStreamId);
+                (headers.StreamId > lastIncomingStreamId);
 
             // Remark:
             // The HEADERS might also be trailers for a stream which has existed

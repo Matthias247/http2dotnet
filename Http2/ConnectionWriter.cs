@@ -162,7 +162,7 @@ namespace Http2
                         // Copy the maximum frame size inside the lock to avoid races
                         maxFrameSize = options.MaxFrameSize;
                         // If there's nothing to write check if we should close the connection
-                        if (writeRequest != null)
+                        if (writeRequest == null)
                         {
                             if (this.closeRequested)
                             {
@@ -191,15 +191,19 @@ namespace Http2
                     }
                 }
             }
-            catch (Exception)
+            catch (Exception e)
             {
                 // We will catch this exception if writing to the output stream
                 // will fail at any point of time
+                if (Connection.logger != null && Connection.logger.IsEnabled(LogLevel.Error))
+                {
+                    Connection.logger.LogError("Writer error: {0}", e);
+                }
             }
 
             // Close the connection if that hasn't happened yet
             // That's even necessary if the an error happened
-            await CloseNow();
+            await CloseNow(false);
 
             // Set the closed flag which will avoid new write items to be added
             lock (mutex)
@@ -217,7 +221,7 @@ namespace Http2
         /// Forces closing the connection immediatly.
         /// Pending write tasks will fail.
         /// </summary>
-        public async ValueTask<object> CloseNow()
+        private async ValueTask<object> CloseNow(bool needWakeup)
         {
             if (Interlocked.CompareExchange(ref closeConnectionIssued, 1, 0) == 0)
             {
@@ -239,13 +243,28 @@ namespace Http2
                 // but try to write that request. Won't matter if the writes fails,
                 // since it's intended to get out of the main working loop - with or
                 // without an exception.
-                lock (mutex)
+                if (needWakeup)
                 {
-                    this.closeRequested = true;
+                    lock (mutex)
+                    {
+                        this.closeRequested = true;
+                    }
+                    wakeupWriter.Set();
                 }
-                wakeupWriter.Set();
             }
             return null;
+        }
+
+        /// <summary>
+        /// Forces closing the connection immediatly.
+        /// Pending write tasks will fail.
+        /// </summary>
+        public ValueTask<object> CloseNow()
+        {
+            // This API is called from outside of the write task
+            // This means the task might be blocked waiting for a need write
+            // request and must be woken up.
+            return CloseNow(true);
         }
 
         /// <summary>
@@ -355,7 +374,7 @@ namespace Http2
                         await WriteGoAwayFrameAsync(wr);
                         break;
                     case FrameType.Continuation:
-                        throw new Exception("Continuations might not be directly queued");
+                        throw new Exception("Continuations may not be directly queued");
                     case FrameType.Ping:
                         await WritePingFrameAsync(wr);
                         break;
@@ -393,16 +412,7 @@ namespace Http2
                     }
                 }
 
-                if (wr.Header.Type == FrameType.Continuation)
-                {
-                    // Nobody is waiting for the write request
-                    // which means nobody will release it afterwards
-                    ReleaseWriteRequest(wr);
-                }
-                else
-                {
-                    wr.Completed.Set();
-                }
+                wr.Completed.Set();
             }
             return null;
         }
@@ -736,8 +746,12 @@ namespace Http2
 
             while (true)
             {
-                // Encode a header block fragment
+                // Encode a header block fragment and copy it to the output buffer
                 var encodeResult = this.hEncoder.Encode(headers, maxFrameSize);
+                Array.Copy(
+                    encodeResult.Bytes, 0,
+                    outBuf, FrameHeader.HeaderSize,
+                    encodeResult.Bytes.Length);
                 sentHeaders += encodeResult.FieldCount;
                 var remaining = nrTotalHeaders - sentHeaders;
 
@@ -857,11 +871,14 @@ namespace Http2
                 }
             }
 
-            // Signal all queued up writes as finished with an ResetError
-            foreach (var elem in writeQueue)
+            if (writeQueue != null)
             {
-                elem.Result = WriteResult.StreamResetError;
-                elem.Completed.Set();
+                // Signal all queued up writes as finished with an ResetError
+                foreach (var elem in writeQueue)
+                {
+                    elem.Result = WriteResult.StreamResetError;
+                    elem.Completed.Set();
+                }
             }
         }
 

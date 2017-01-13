@@ -119,7 +119,10 @@ namespace Http2.Internal
         /// </summary>
         public void Read(ArraySegment<byte> data)
         {
-            if (data.Count > this.Available) throw new Exception("Invalid read length");
+            if (data.Count > this.Available)
+            {
+                throw new Exception("Invalid read length");
+            }
 
             var avail = 0; // Amount of data that is available for a first read
             if (this.writerNotAdvanced)
