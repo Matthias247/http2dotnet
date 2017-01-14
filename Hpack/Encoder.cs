@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace Hpack
+namespace Http2.Hpack
 {
     /// <summary>
     /// HPACK encoder

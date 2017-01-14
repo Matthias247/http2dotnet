@@ -1,5 +1,5 @@
 ﻿
-namespace Hpack
+namespace Http2.Hpack
 {
     /// <summary>
     /// Stores default values for the library

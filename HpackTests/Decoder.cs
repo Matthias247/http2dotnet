@@ -1,15 +1,14 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Reflection;
 using Xunit;
-using Hpack;
+using Http2.Hpack;
 
 namespace HpackTests
 {
     public class DecoderTests
     {
-        static DynamicTable GetDynamicTableOfDecoder(Hpack.Decoder decoder)
+        static DynamicTable GetDynamicTableOfDecoder(Decoder decoder)
         {
             var flags = BindingFlags.NonPublic | BindingFlags.Instance;
             var fi = decoder.GetType().GetTypeInfo().GetField("_headerTable", flags);
@@ -22,7 +21,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHaveADefaultDynamicTableSizeAndLimitOf4096()
         {
-            Hpack.Decoder decoder = new Hpack.Decoder();
+            Decoder decoder = new Decoder();
 
             Assert.Equal(4096, decoder.DynamicTableSize);
             Assert.Equal(4096, decoder.DynamicTableSizeLimit);
@@ -31,7 +30,7 @@ namespace HpackTests
         [Fact]
         public void ShouldAllowToAdjustTheDynamicTableSizeAndLimtThroughConstructor()
         {
-            Hpack.Decoder decoder = new Hpack.Decoder(new Hpack.Decoder.Options{
+            Decoder decoder = new Decoder(new Decoder.Options{
                 DynamicTableSize = 0,
                 DynamicTableSizeLimit = 10
             });
@@ -43,7 +42,7 @@ namespace HpackTests
         [Fact]
         public void ShouldAllowReadingAFullyIndexedValueFromTheStaticTable()
         {
-            Hpack.Decoder decoder = new Hpack.Decoder();
+            Decoder decoder = new Decoder();
 
             var buf = new Buffer();
             buf.WriteByte(0x81);
@@ -80,7 +79,7 @@ namespace HpackTests
         [Fact]
         public void ShouldAllowReadingAFullyIndexedValueFromTheStaticAndDynamicTable()
         {
-            var decoder = new Hpack.Decoder(new Hpack.Decoder.Options{
+            var decoder = new Decoder(new Decoder.Options{
                 DynamicTableSize = 100000,
                 DynamicTableSizeLimit = 100000,
             });
@@ -121,18 +120,18 @@ namespace HpackTests
         [Fact]
         public void ShouldThrowAnErrorWhenReadingFullyIndexedValueOnInvalidIndex()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
             var buf = new Buffer();
             buf.WriteByte(0x80); // Index 0 // TODO: Might be used for something different
             Assert.Throws<IndexOutOfRangeException>(() => decoder.Decode(buf.View));
 
-            decoder = new Hpack.Decoder();
+            decoder = new Decoder();
             buf = new Buffer();
             buf.WriteByte(0xC0); // 1100 0000 => Index 64 is outside of static table
             Assert.Throws<IndexOutOfRangeException>(() => decoder.Decode(buf.View));
 
             // Put enough elements into the dynamic table to reach 64 in total
-            decoder = new Hpack.Decoder();
+            decoder = new Decoder();
             var neededAdds = 64 - StaticTable.Length - 1; // -1 because 1 is not a valid index
             var dtable = GetDynamicTableOfDecoder(decoder);
             for (var i = neededAdds; i >= 0; i--)
@@ -154,7 +153,7 @@ namespace HpackTests
         [Fact]
         public void ShouldAllowReceivingIncrementalIndexedFieldsWithIndexedName()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
 
             var buf = new Buffer();
             buf.WriteByte(0x42); // Incremental indexed, header index 2
@@ -175,7 +174,7 @@ namespace HpackTests
         [Fact]
         public void ShouldAllowReceivingIncrementalIndexedFieldsWithNotIndexedName()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
 
             var buf = new Buffer();
             buf.WriteByte(0x40); // Incremental indexed, no name index
@@ -265,7 +264,7 @@ namespace HpackTests
         [Fact]
         public void ShouldAllowReceivingNotIndexedFieldsWithIndexedName()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
 
             var buf = new Buffer();
             buf.WriteByte(0x02); // Not indexed, header index 2
@@ -286,7 +285,7 @@ namespace HpackTests
         [Fact]
         public void ShouldAllowReceivingNotIndexedFieldsWithNotIndexedName()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
 
             var buf = new Buffer();
             buf.WriteByte(0x00); // Not indexed, no name index
@@ -309,7 +308,7 @@ namespace HpackTests
         [Fact]
         public void ShouldAllowReceivingNeverIndexedFieldsWithIndexedName()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
 
             var buf = new Buffer();
             buf.WriteByte(0x12); // Never indexed, header index 2
@@ -330,7 +329,7 @@ namespace HpackTests
         [Fact]
         public void ShouldAllowReceivingNeverIndexedFieldsWithNotIndexedName()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
 
             var buf = new Buffer();
             buf.WriteByte(0x10); // Never indexed, no name index
@@ -353,7 +352,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleTableSizeUpdateFrames()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
 
             // Table update in single step
             var buf = new Buffer();
@@ -391,7 +390,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleHeadersAfterATableSizeUpdateFrame()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
 
             // Table update in single step
             var buf = new Buffer();
@@ -411,7 +410,7 @@ namespace HpackTests
         [Fact]
         public void ShouldThrowAnErrorIfTableSizeUpdateExceedsLimit()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
 
             decoder.DynamicTableSizeLimit = 100;
             var buf = new Buffer();
@@ -425,7 +424,7 @@ namespace HpackTests
         [Fact]
         public void ShouldNotCrashWhenDecodeIsStartedWith0Bytes()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
 
             var buf = new Buffer();
             var consumed = decoder.Decode(buf.View);
@@ -437,7 +436,7 @@ namespace HpackTests
         [Fact]
         public void ShouldNotCrashWhenNotNameIndexedDecodeIsContinuedWith0Bytes()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
 
             var emptyView = new ArraySegment<byte>(new byte[20], 20, 0);
 
@@ -492,7 +491,7 @@ namespace HpackTests
         public void ShouldNotCrashWhenNameIndexedDecodeIsContinuedWith0Bytes()
         {
             // Need more entries in the dynamic table
-            var decoder = new Hpack.Decoder(new Hpack.Decoder.Options{
+            var decoder = new Decoder(new Decoder.Options{
                 DynamicTableSize = 100000,
                 DynamicTableSizeLimit = 100000,
             });
@@ -576,7 +575,7 @@ namespace HpackTests
         public void ShouldNotCrashWhenFullyIndexedDecodeIsContinuiedWith0Bytes()
         {
             // Need more entries in the dynamic table
-            var decoder = new Hpack.Decoder(new Hpack.Decoder.Options {
+            var decoder = new Decoder(new Decoder.Options {
                 DynamicTableSize = 100000,
                 DynamicTableSizeLimit = 100000,
             });
@@ -629,7 +628,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC2_1OfTheSpecificationCorrectly()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
             
             var buf = new Buffer();
             buf.AddHexString(
@@ -648,7 +647,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC2_2OfTheSpecificationCorrectly()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
             var buf = new Buffer();
             buf.AddHexString("040c2f73616d706c652f70617468");
 
@@ -664,7 +663,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC2_3OfTheSpecificationCorrectly()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
             var buf = new Buffer();
             buf.AddHexString("100870617373776f726406736563726574");
 
@@ -680,7 +679,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC2_4OfTheSpecificationCorrectly()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
             var buf = new Buffer();
             buf.AddHexString("82");
 
@@ -696,7 +695,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC3OfTheSpecificationCorrectly()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
             // C.3.1
             var buf = new Buffer();
             buf.AddHexString("828684410f7777772e6578616d706c652e636f6d");
@@ -756,7 +755,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC4OfTheSpecificationCorrectly()
         {
-            var decoder = new Hpack.Decoder();
+            var decoder = new Decoder();
             // C.4.1
             var buf = new Buffer();
             buf.AddHexString("828684418cf1e3c2e5f23a6ba0ab90f4ff");
@@ -816,7 +815,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC5OfTheSpecificationCorrectly()
         {
-            var decoder = new Hpack.Decoder(new Hpack.Decoder.Options {
+            var decoder = new Decoder(new Decoder.Options {
                 DynamicTableSize = 256,
                 DynamicTableSizeLimit = 256,
             });
@@ -892,7 +891,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC6OfTheSpecificationCorrectly()
         {
-            var decoder = new Hpack.Decoder(new Hpack.Decoder.Options {
+            var decoder = new Decoder(new Decoder.Options {
                 DynamicTableSize = 256,
                 DynamicTableSizeLimit = 256,
             });
@@ -961,7 +960,7 @@ namespace HpackTests
             Assert.Equal(3, decoder.DynamicTableLength);
         }
 
-        static List<HeaderField> DecodeAll(Hpack.Decoder decoder, Buffer buf)
+        static List<HeaderField> DecodeAll(Decoder decoder, Buffer buf)
         {
             var results = new List<HeaderField>();
             var total = buf.View;

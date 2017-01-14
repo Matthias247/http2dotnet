@@ -1,7 +1,7 @@
 using System;
 using System.Text;
 
-namespace Hpack
+namespace Http2.Hpack
 {
     public enum HuffmanStrategy
     {

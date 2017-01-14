@@ -1,9 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Reflection;
 using Xunit;
-using Hpack;
+using Http2.Hpack;
 
 namespace HpackTests
 {
@@ -14,14 +10,14 @@ namespace HpackTests
         [Fact]
         public void ShouldHaveADefaultDynamicTableSizeOf4096()
         {
-            var encoder = new Hpack.Encoder();
+            var encoder = new Encoder();
             Assert.Equal(4096, encoder.DynamicTableSize);
         }
 
         [Fact]
         public void ShouldAllowToAdjustTheDynamicTableSizeThroughConstructor()
         {
-            var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
+            var encoder = new Encoder(new Encoder.Options{
                 DynamicTableSize = 0,
             });
             Assert.Equal(0, encoder.DynamicTableSize);
@@ -30,7 +26,7 @@ namespace HpackTests
         [Fact]
         public void ShouldAllowToAdjustTheDynamicTableSizeThroughPropertySetter()
         {
-            var encoder = new Hpack.Encoder();
+            var encoder = new Encoder();
             encoder.DynamicTableSize = 200;
             Assert.Equal(200, encoder.DynamicTableSize);
         }
@@ -38,7 +34,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC2_1OfTheSpecificationCorrectly()
         {
-            var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
+            var encoder = new Encoder(new Encoder.Options{
                 HuffmanStrategy = HuffmanStrategy.Never,
             });
             var fields = new HeaderField[] {
@@ -60,7 +56,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC2_2OfTheSpecificationCorrectly()
         {
-            var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
+            var encoder = new Encoder(new Encoder.Options{
                 HuffmanStrategy = HuffmanStrategy.Never,
             });
             // Decrease table size to avoid using indexing
@@ -83,7 +79,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC2_3OfTheSpecificationCorrectly()
         {
-            var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
+            var encoder = new Encoder(new Encoder.Options{
                 HuffmanStrategy = HuffmanStrategy.Never,
             });
             var fields = new HeaderField[] {
@@ -103,7 +99,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC2_4OfTheSpecificationCorrectly()
         {
-            var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
+            var encoder = new Encoder(new Encoder.Options{
                 HuffmanStrategy = HuffmanStrategy.Never,
             });
             var fields = new HeaderField[] {
@@ -123,7 +119,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC3OfTheSpecificationCorrectly()
         {
-            var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
+            var encoder = new Encoder(new Encoder.Options{
                 HuffmanStrategy = HuffmanStrategy.Never,
             });
             var fields = new HeaderField[] {
@@ -181,7 +177,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC4OfTheSpecificationCorrectly()
         {
-            var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
+            var encoder = new Encoder(new Encoder.Options{
                 HuffmanStrategy = HuffmanStrategy.Always,
             });
             var fields = new HeaderField[] {
@@ -239,7 +235,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC5OfTheSpecificationCorrectly()
         {
-            var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
+            var encoder = new Encoder(new Encoder.Options{
                 HuffmanStrategy = HuffmanStrategy.Never,
                 DynamicTableSize = 256,
             });
@@ -310,7 +306,7 @@ namespace HpackTests
         [Fact]
         public void ShouldHandleExampleC6OfTheSpecificationCorrectly()
         {
-            var encoder = new Hpack.Encoder(new Hpack.Encoder.Options{
+            var encoder = new Encoder(new Encoder.Options{
                 HuffmanStrategy = HuffmanStrategy.Always,
                 DynamicTableSize = 256,
             });

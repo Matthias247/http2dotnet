@@ -1,8 +1,7 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
 
-using Hpack;
+using Http2.Hpack;
 
 namespace Http2
 {

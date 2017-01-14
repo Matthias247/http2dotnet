@@ -1,7 +1,6 @@
 using System;
-using System.Collections.Generic;
 
-namespace Hpack
+namespace Http2.Hpack
 {
     /// <summary>
     /// The combination of the static and a dynamic header table

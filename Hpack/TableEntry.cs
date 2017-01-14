@@ -1,5 +1,5 @@
 
-namespace Hpack
+namespace Http2.Hpack
 {
     /// <summary>
     /// An entry in the static or dynamic table

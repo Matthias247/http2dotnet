@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
-using Hpack;
+using Http2.Hpack;
 using Http2.Internal;
 
 namespace Http2

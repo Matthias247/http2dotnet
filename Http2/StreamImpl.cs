@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-using Hpack;
+using Http2.Hpack;
 using Http2.Internal;
 
 namespace Http2

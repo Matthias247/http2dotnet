@@ -2,7 +2,7 @@
 using System.Buffers;
 using System.Text;
 
-namespace Hpack
+namespace Http2.Hpack
 {
     /// <summary>
     /// Decodes string values according to the HPACK specification.

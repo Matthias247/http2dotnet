@@ -1,5 +1,5 @@
 ﻿
-namespace Hpack
+namespace Http2.Hpack
 {
     /// <summary>
     /// An HTTP/2 header field

@@ -1,6 +1,6 @@
 using System;
 
-namespace Hpack
+namespace Http2.Hpack
 {
     /// <summary>
     /// Encodes integer values according to the HPACK specification.

@@ -1,4 +1,4 @@
-﻿namespace Hpack
+﻿namespace Http2.Hpack
 {
     /// <summary>
     /// The static header table of HPACK as defined in RFC 7541 Appendix A

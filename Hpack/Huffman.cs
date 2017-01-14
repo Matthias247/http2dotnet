@@ -2,7 +2,7 @@
 using System.Text;
 using System.Buffers;
 
-namespace Hpack
+namespace Http2.Hpack
 {
     public class Huffman
     {

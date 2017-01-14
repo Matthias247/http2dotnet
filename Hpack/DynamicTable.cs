@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Hpack
+namespace Http2.Hpack
 {
     /// <summary>
     /// A dynamic header table

@@ -1,7 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-using Http2;
+﻿using Http2;
 using Xunit;
 
 namespace Http2Tests
