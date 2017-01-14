@@ -4,6 +4,9 @@ using System.Threading.Tasks;
 
 namespace Http2
 {
+    /// <summary>
+    /// Extension methods for System.IO.Stream
+    /// </summary>
     public static class IoStreamExtensions
     {
         /// <summary>
@@ -78,7 +81,7 @@ namespace Http2
             public ValueTask<object> CloseAsync()
             {
                 stream.Dispose();
-                return new ValueTask<object>(null);
+                return new ValueTask<object>(DoneTask.Instance);
             }
         }
     }

@@ -74,10 +74,13 @@ class Program
             // Accept TCP sockets
             var clientSocket = await listener.AcceptSocketAsync();
             clientSocket.NoDelay = true;
-            var stream = new NetworkStream(clientSocket, true);
-            var wrappedStreams = stream.CreateStreams();
+            // Create HTTP/2 stream abstraction on top of the socket
+            var wrappedStreams = clientSocket.CreateStreams();
+            // Alternatively on top of a System.IO.Stream
+            //var netStream = new NetworkStream(clientSocket, true);
+            //var wrappedStreams = netStream.CreateStreams();
 
-            // Build a HTTP connection on top of the socket
+            // Build a HTTP connection on top of the stream abstraction
             var http2Con = new Connection(new Connection.Options
             {
                 InputStream = wrappedStreams.Reader,

@@ -48,4 +48,13 @@ namespace Http2
     public interface IStreamWriterCloser : IStreamWriter, IStreamCloser
     {
     }
+
+    /// <summary>
+    /// A static instance of a completed ValueTask&lt;object&gt;
+    /// </summary>
+    internal static class DoneTask
+    {
+        public static readonly ValueTask<object> Instance =
+            new ValueTask<object>(1234);
+    }
 }
