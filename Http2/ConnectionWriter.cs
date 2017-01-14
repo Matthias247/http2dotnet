@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -421,9 +422,11 @@ namespace Http2
         {
             wr.Header.Length = WindowUpdateData.Size;
             // Serialize the frame header into the outgoing buffer
-            wr.Header.EncodeInto(new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize));
+            wr.Header.EncodeInto(
+                new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize));
             // Serialize the window update data
-            wr.WindowUpdateData.EncodeInto(new ArraySegment<byte>(outBuf, FrameHeader.HeaderSize, WindowUpdateData.Size));
+            wr.WindowUpdateData.EncodeInto(new ArraySegment<byte>(
+                outBuf, FrameHeader.HeaderSize, WindowUpdateData.Size));
             var totalSize = FrameHeader.HeaderSize + WindowUpdateData.Size;
             var data = new ArraySegment<byte>(outBuf, 0, totalSize);
 
@@ -453,6 +456,7 @@ namespace Http2
                 return true;
             }
 
+            // All other frame types belong in the queue for the associated stream
             for (var i = 0; i < Streams.Count; i++)
             {
                 var stream = Streams[i];
@@ -474,8 +478,15 @@ namespace Http2
                 }
             }
 
+            // The stream was not found
             return false;
         }
+
+        /// <summary>A pool of WriteRequest structures for reuse</summary>
+        private static readonly ConcurrentBag<WriteRequest> writeRequestPool =
+            new ConcurrentBag<WriteRequest>();
+        /// <summary>Max amount of pooled requests</summary>
+        private const int MaxPooledWriteRequests = 10*1024;
 
         /// <summary>
         /// Allocates a new WriteRequest structure.
@@ -485,6 +496,12 @@ namespace Http2
         /// <returns></returns>
         private WriteRequest AllocateWriteRequest()
         {
+            WriteRequest r;
+            if (writeRequestPool.TryTake(out r))
+            {
+                return r;
+            }
+
             var wr = new WriteRequest()
             {
                 Completed = new AsyncManualResetEvent(false),
@@ -506,6 +523,14 @@ namespace Http2
             wr.Data = Constants.EmptyByteArray;
             wr.GoAwayData.DebugData = Constants.EmptyByteArray;
             wr.Completed.Reset();
+
+            // It would for sure be better if the ConcurrentBag had some kind of
+            // PutIfCountLessThan method
+            if (writeRequestPool.Count < MaxPooledWriteRequests)
+            {
+                writeRequestPool.Add(wr);
+            }
+            // in other situations the WriteRequest just gets garbage collected
         }
 
         private async ValueTask<WriteResult> PerformWriteRequestAsync(
