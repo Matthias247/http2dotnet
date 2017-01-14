@@ -43,19 +43,30 @@ namespace Http2
                 this.stream = stream;
             }
 
-            public async ValueTask<StreamReadResult> ReadAsync(ArraySegment<byte> buffer)
+            public ValueTask<StreamReadResult> ReadAsync(ArraySegment<byte> buffer)
             {
                 if (buffer.Count == 0)
                 {
                     throw new Exception("Reading 0 bytes is not supported");
                 }
 
-                var res = await stream.ReadAsync(buffer.Array, buffer.Offset, buffer.Count);
-                return new StreamReadResult
+                var readTask = stream.ReadAsync(buffer.Array, buffer.Offset, buffer.Count);
+                Task<StreamReadResult> transformedTask = readTask.ContinueWith(tt =>
                 {
-                    BytesRead = res,
-                    EndOfStream = res == 0,
-                };
+                    if (tt.Exception != null)
+                    {
+                        throw tt.Exception;
+                    }
+
+                    var res = tt.Result;
+                    return new StreamReadResult
+                    {
+                        BytesRead = res,
+                        EndOfStream = res == 0,
+                    };
+                });
+
+                return new ValueTask<StreamReadResult>(transformedTask);
             }
 
             public ValueTask<object> WriteAsync(ArraySegment<byte> buffer)

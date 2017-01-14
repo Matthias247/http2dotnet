@@ -346,30 +346,29 @@ namespace Http2
                         };
                         hasResult = true;
 
-                        if (recvBuf.Available == 0)
+                        if (recvBuf.Available == 0 && !streamClosedFromRemote)
                         {
-                            if (!streamClosedFromRemote)
-                            {
-                                // If all data was consumed the next read must be blocked
-                                // until more data comes in or the stream gets closed or reset
-                                readDataPossible.Reset();
-                            }
-                            else
-                            {
-                                // The stream was closed, which means no more data will follow
-                                // In this case we can dispose the receive buffer.
-                                recvBuf.Dispose();
-                                recvBuf = null;
-                            }
+                            // If all data was consumed the next read must be blocked
+                            // until more data comes in or the stream gets closed or reset
+                            readDataPossible.Reset();
                         }
                     }
                     else if (streamClosedFromRemote)
                     {
+                        // Deliver a notification that the stream was closed
                         result = new StreamReadResult{
                             BytesRead = 0,
                             EndOfStream = true,
                         };
                         hasResult = true;
+
+                        if (recvBuf != null)
+                        {
+                            // The stream was closed, which means no more data will follow
+                            // In this case we can dispose the receive buffer.
+                            recvBuf.Dispose();
+                            recvBuf = null;
+                        }
                     }
                 }
 

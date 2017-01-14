@@ -31,7 +31,7 @@ class Program
 
     static byte[] responseBody = Encoding.ASCII.GetBytes("Hello World!");
 
-    static async Task HandleIncomingStream(IStream stream)
+    static async void HandleIncomingStream(IStream stream)
     {
         try
         {
@@ -72,8 +72,9 @@ class Program
         while (true)
         {
             // Accept TCP sockets
-            var tcpClient = await listener.AcceptTcpClientAsync();
-            var stream = tcpClient.GetStream();
+            var clientSocket = await listener.AcceptSocketAsync();
+            clientSocket.NoDelay = true;
+            var stream = new NetworkStream(clientSocket, true);
             var wrappedStreams = stream.CreateStreams();
 
             // Build a HTTP connection on top of the socket
