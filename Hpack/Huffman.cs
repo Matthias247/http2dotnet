@@ -127,6 +127,8 @@ namespace Http2.Hpack
 
             var bitOffset = 0;
             var byteOffset = buf.Offset;
+            /// The value at the current offset in the output buffer
+            var currentValue = 0;
 
             for (var i = bytes.Offset; i  < bytes.Offset + bytes.Count; i++)
             {
@@ -142,10 +144,6 @@ namespace Http2.Hpack
                     var bitsToPut = 8 - bitOffset;
                     if (bits < bitsToPut) bitsToPut = bits;
 
-                    var val = 0;
-                    if (bitOffset == 0) val = 0;
-                    else val = buf.Array[byteOffset]; // read written value
-
                     // Take the bitsToPut highest bits from binVal
                     var putBytes = binVal >> (bits - bitsToPut);
                     // Align the value on 8 bits
@@ -153,13 +151,16 @@ namespace Http2.Hpack
                     // And put it in place at the position where we need it
                     // This can not be directly combined with the former operation,
                     // because otherwise the trailing numbers wouldn't be zeroed
-                    val = val | (putBytes >> bitOffset);
-                    buf.Array[byteOffset] = (byte)(val & 0xFF);
+                    currentValue = currentValue | (putBytes >> bitOffset);
                     bitOffset += bitsToPut;
                     if (bitOffset == 8)
                     {
-                        bitOffset = 0;
+                        // A full output byte was produced
+                        // Write it to target buffer and advance to the next byte
+                        buf.Array[byteOffset] = (byte)(currentValue & 0xFF);
                         byteOffset++;
+                        bitOffset = 0;
+                        currentValue = 0;
                     }
                     bits -= bitsToPut;
                     // Need only the low amount of bits
@@ -168,11 +169,12 @@ namespace Http2.Hpack
             }
 
             // Complete the last byte with 1s if necessary (EOS symbol)
+            // and save currentValue, since this hasn't happened yet
             if (bitOffset != 0)
             {
-                var val = (1 << (8-bitOffset)) - 1;
-                val |= buf.Array[byteOffset];
-                buf.Array[byteOffset] = (byte)(val & 0xFF);
+                var eosBits = (1 << (8-bitOffset)) - 1;
+                currentValue |= eosBits;
+                buf.Array[byteOffset] = (byte)(currentValue & 0xFF);
                 byteOffset++;
             }
 
