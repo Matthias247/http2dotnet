@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
 
 namespace Http2.Hpack
 {
@@ -32,8 +31,8 @@ namespace Http2.Hpack
         /// </summary>
         public struct Result
         {
-            /// <summary>Encoded header block</summary>
-            public byte[] Bytes;
+            /// <summary>The number of used bytes of the input buffer</summary>
+            public int UsedBytes;
 
             /// <summary>The number of header fields that were encoded</summary>
             public int FieldCount;
@@ -43,7 +42,7 @@ namespace Http2.Hpack
         HuffmanStrategy _huffmanStrategy;
 
         /// <summary>
-        /// The current maximum size of the dynamic table.!--
+        /// The current maximum size of the dynamic table.
         /// Setting the size might cause evictions.
         /// If the size is changed a header table size update must be sent to the
         /// remote peer. That must be encoded seperatly with the EncodeSizeUpdate()
@@ -113,17 +112,23 @@ namespace Http2.Hpack
         }
 
         /// <summary>
-        /// Encodes the list of the given header fields into a Buffer.
-        /// It thereby may only use maxBytes at most.
-        /// Therefore the operations returns the encoded header fields as well
-        /// as an information how many fields were encoded. If not all fields
-        /// were encoded these should be encoded into a seperate header block.
+        /// Encodes the list of the given header fields into a Buffer, which
+        /// represents the data part of a header block fragment.
+        /// The operation will only try to write as much headers as fit in the
+        /// fragment.
+        /// Therefore the operations returns the size of the encoded header
+        /// fields as well as an information how many fields were encoded.
+        /// If not all fields were encoded these should be encoded into a
+        /// seperate header block.
         /// </summary>
-        /// <returns>The number of processed bytes</returns>
-        public Result Encode(IEnumerable<HeaderField> headers, int maxBytes)
+        /// <returns>The used bytes and number of encoded headers</returns>
+        public Result EncodeInto(
+            ArraySegment<byte> buf,
+            IEnumerable<HeaderField> headers)
         {
-            byte[] result = new byte[0];
             var nrEncodedHeaders = 0;
+            var offset = buf.Offset;
+            var count = buf.Count;
 
             foreach (var header in headers)
             {
@@ -132,19 +137,30 @@ namespace Http2.Hpack
                 var idx = _headerTable.GetBestMatchingIndex(header, out fullMatch);
                 var nameMatch = idx != -1;
 
-                byte []fieldBytes;
+                // Make a copy for the offset that can be manipulated and which
+                // will not yield in losing the real offset if we can only write
+                // a part of a field
+                var tempOffset = offset;
 
                 if (fullMatch)
                 {
                     // Encode index with 7bit prefix
-                    fieldBytes = IntEncoder.Encode(idx, 0x80, 7);
+                    var used = IntEncoder.EncodeInto(
+                        new ArraySegment<byte>(buf.Array, tempOffset, count),
+                        idx, 0x80, 7);
+                    if (used == 0) break;
+                    tempOffset += used;
+                    count -= used;
                 }
                 else
                 {
                     // Check if we want to add the new entry to the table or not
                     // Determine name and value length for that
-                    var nameLen = Encoding.ASCII.GetByteCount(header.Name);
-                    var valLen = Encoding.ASCII.GetByteCount(header.Value);
+                    // TODO: This could be improved by using a bytecount method
+                    // that only counts up to DynamicTableSize, since we can't
+                    // add more bytes anyway
+                    var nameLen = StringEncoder.GetByteLength(header.Name);
+                    var valLen = StringEncoder.GetByteLength(header.Value);
 
                     var addToIndex = false;
                     var neverIndex = false;
@@ -165,22 +181,31 @@ namespace Http2.Hpack
                         }
                     }
 
-                    byte[] nameBytes;
-
                     if (addToIndex)
                     {
                         if (nameMatch)
                         {
                             // Encode index with 6bit prefix
-                            nameBytes = IntEncoder.Encode(idx, 0x40, 6);
+                            var used = IntEncoder.EncodeInto(
+                                new ArraySegment<byte>(buf.Array, tempOffset, count),
+                                idx, 0x40, 6);
+                            if (used == 0) break;
+                            tempOffset += used;
+                            count -= used;
                         }
                         else
                         {
                             // Write 0x40 and name
-                            var str = StringEncoder.Encode(header.Name, this._huffmanStrategy);
-                            nameBytes = new byte[1+str.Length];
-                            nameBytes[0] = 0x40;
-                            Array.Copy(str, 0, nameBytes, 1, str.Length);
+                            if (count < 1) break;
+                            buf.Array[tempOffset] = 0x40;
+                            tempOffset += 1;
+                            count -= 1;
+                            var used = StringEncoder.EncodeInto(
+                                new ArraySegment<byte>(buf.Array, tempOffset, count),
+                                header.Name, nameLen, this._huffmanStrategy);
+                            if (used == 0) break;
+                            tempOffset += used;
+                            count -= used;
                         }
                         // Add the encoded field to the index
                         this._headerTable.Insert(header.Name, nameLen, header.Value, valLen);
@@ -190,15 +215,26 @@ namespace Http2.Hpack
                         if (nameMatch)
                         {
                             // Encode index with 4bit prefix
-                            nameBytes = IntEncoder.Encode(idx, 0x00, 4);
+                            var used = IntEncoder.EncodeInto(
+                                new ArraySegment<byte>(buf.Array, tempOffset, count),
+                                idx, 0x00, 4);
+                            if (used == 0) break;
+                            tempOffset += used;
+                            count -= used;
                         }
                         else
                         {
                             // Write 0x00 and name
-                            var str = StringEncoder.Encode(header.Name, this._huffmanStrategy);
-                            nameBytes = new byte[1+str.Length];
-                            nameBytes[0] = 0x00;
-                            Array.Copy(str, 0, nameBytes, 1, str.Length);
+                            if (count < 1) break;
+                            buf.Array[tempOffset] = 0x00;
+                            tempOffset += 1;
+                            count -= 1;
+                            var used = StringEncoder.EncodeInto(
+                                new ArraySegment<byte>(buf.Array, tempOffset, count),
+                                header.Name, nameLen, this._huffmanStrategy);
+                            if (used == 0) break;
+                            tempOffset += used;
+                            count -= used;
                         }
                     }
                     else
@@ -206,47 +242,48 @@ namespace Http2.Hpack
                         if (nameMatch)
                         {
                             // Encode index with 4bit prefix
-                            nameBytes = IntEncoder.Encode(idx, 0x10, 4);
+                            var used = IntEncoder.EncodeInto(
+                                new ArraySegment<byte>(buf.Array, offset, count),
+                                idx, 0x10, 4);
+                            if (used == 0) break;
+                            tempOffset += used;
+                            count -= used;
                         }
                         else
                         {
                             // Write 0x10 and name
-                            var str = StringEncoder.Encode(header.Name, this._huffmanStrategy);
-                            nameBytes = new byte[1+str.Length];
-                            nameBytes[0] = 0x10;
-                            Array.Copy(str, 0, nameBytes, 1, str.Length);
+                            if (count < 1) break;
+                            buf.Array[tempOffset] = 0x10;
+                            tempOffset += 1;
+                            count -= 1;
+                            var used = StringEncoder.EncodeInto(
+                                new ArraySegment<byte>(buf.Array, tempOffset, count),
+                                header.Name, nameLen, this._huffmanStrategy);
+                            if (used == 0) break;
+                            tempOffset += used;
+                            count -= used;
                         }
                     }
 
                     // Write the value string
-                    var valueBytes = StringEncoder.Encode(header.Value, this._huffmanStrategy);
-                    // Merge everything into fieldBytes
-                    fieldBytes = new byte[nameBytes.Length + valueBytes.Length];
-                    Array.Copy(nameBytes, 0, fieldBytes, 0, nameBytes.Length);
-                    Array.Copy(valueBytes, 0, fieldBytes, nameBytes.Length, valueBytes.Length);
+                    var usedForValue = StringEncoder.EncodeInto(
+                        new ArraySegment<byte>(buf.Array, tempOffset, count),
+                        header.Value, valLen, this._huffmanStrategy);
+                    if (usedForValue == 0) break;
+                    // Writing the value succeeded
+                    tempOffset += usedForValue;
+                    count -= usedForValue;
                 }
 
-                // Copy the bytes from the field if it will fit into
-                // the given maximum size
-                if (result.Length + fieldBytes.Length <= maxBytes)
-                {
-                    var newResult = new byte[result.Length + fieldBytes.Length];
-                    Array.Copy(result, 0, newResult, 0, result.Length);
-                    Array.Copy(fieldBytes, 0, newResult, result.Length, fieldBytes.Length);
-                    result = newResult;
-                    nrEncodedHeaders++;
-                    // Encode more headers
-                }
-                else
-                {
-                    // Not enough space for this header
-                    break;
-                }
+                // If we got here the whole field could be encoded into the
+                // target buffer
+                offset = tempOffset;
+                nrEncodedHeaders++;
             }
 
             return new Result
             {
-                Bytes = result,
+                UsedBytes = offset - buf.Offset,
                 FieldCount = nrEncodedHeaders,
             };
         }

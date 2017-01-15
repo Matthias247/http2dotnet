@@ -48,8 +48,8 @@ class Program
             // Send a response which consists of headers and a payload
             var responseHeaders = new HeaderField[] {
                 new HeaderField { Name = ":status", Value = "200" },
-                new HeaderField { Name = "abcd", Value = "asdfkljdadfksjllköfds" },
-                new HeaderField { Name = "nextone", Value = "asdfkljdadfksjllköfds" },
+                new HeaderField { Name = "abcd", Value = "asdfkljdadfksjll" },
+                new HeaderField { Name = "nextone", Value = "i am a vaLuE" },
             };
             await stream.WriteHeaders(responseHeaders, false);
             await stream.WriteAsync(new ArraySegment<byte>(responseBody), true);
@@ -88,6 +88,7 @@ class Program
                 IsServer = true,
                 Settings = settings,
                 StreamListener = AcceptIncomingStream,
+                HuffmanStrategy = HuffmanStrategy.IfSmaller,
                 Logger = logProvider.CreateLogger("HTTP2Conn" + connectionId),
             });
 

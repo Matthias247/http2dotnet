@@ -3,6 +3,9 @@ using System.Text;
 
 namespace Http2.Hpack
 {
+    /// <summary>
+    /// Possible strategies for applying huffman encoding
+    /// </summary>
     public enum HuffmanStrategy
     {
         /// <summary>Never use Huffman encoding</summary>
@@ -12,29 +15,56 @@ namespace Http2.Hpack
         /// <summary>Use Huffman if the string is shorter in huffman format</summary>
         IfSmaller,
     }
+
     /// <summary>
     /// Encodes string values according to the HPACK specification.
     /// </summary>
     public static class StringEncoder
     {
         /// <summary>
-        /// Encodes the given string
+        /// Returns the byte length of the given string in non-huffman encoded
+        /// form.
         /// </summary>
-        /// <param name="value">The value to encode</param>
-        /// <param name="huffman">Controls the huffman encoding</param>
-        public static byte[] Encode(string value, HuffmanStrategy huffman)
+        public static int GetByteLength(string value)
         {
-            // Convert the string into a buffer
-            // This could maybe be fastened up by dropping the intermediate Buffer
-            var bytes = Encoding.ASCII.GetBytes(value); // TODO: Optimize GC
-            var byteView = new ArraySegment<byte>(bytes);
+            return Encoding.ASCII.GetByteCount(value);
+        }
 
+        /// <summary>
+        /// Encodes the given string into the target buffer
+        /// </summary>
+        /// <param name="buf">The buffer into which the string should be serialized</param>
+        /// <param name="value">The value to encode</param>
+        /// <param name="valueByteLen">
+        /// The length of the string in bytes in non-huffman-encoded form.
+        /// This can be retrieved through the GetByteLength method.
+        /// </param>
+        /// <param name="huffman">Controls the huffman encoding</param>
+        /// <returns>
+        /// The number of bytes that were required to encode the value.
+        /// 0 if the value did not fit into the buffer.
+        /// </returns>
+        public static int EncodeInto(
+            ArraySegment<byte> buf,
+            string value, int valueByteLen, HuffmanStrategy huffman)
+        {
+            var offset = buf.Offset;
+            var free = buf.Count;
+            // Fast check for free space. Doesn't need to be exact
+            if (free < 1 + valueByteLen) return 0;
+
+            var encodedByteLen = valueByteLen;
             var requiredHuffmanBytes = 0;
             var useHuffman = huffman == HuffmanStrategy.Always;
+            byte[] huffmanInputBuf = null;
+
+            // Check if the string should be reencoded with huffman encoding
             if (huffman == HuffmanStrategy.Always || huffman == HuffmanStrategy.IfSmaller)
             {
-                requiredHuffmanBytes = Huffman.EncodedLength(byteView);
-                if (huffman == HuffmanStrategy.IfSmaller && requiredHuffmanBytes < bytes.Length)
+                huffmanInputBuf = Encoding.ASCII.GetBytes(value);
+                requiredHuffmanBytes = Huffman.EncodedLength(
+                    new ArraySegment<byte>(huffmanInputBuf));
+                if (huffman == HuffmanStrategy.IfSmaller && requiredHuffmanBytes < encodedByteLen)
                 {
                     useHuffman = true;
                 }
@@ -42,20 +72,76 @@ namespace Http2.Hpack
 
             if (useHuffman)
             {
-                var outView = new ArraySegment<byte>(new byte[requiredHuffmanBytes]);
-                byteView = Huffman.Encode(byteView, outView);
+                encodedByteLen = requiredHuffmanBytes;
             }
 
-            // Write the length of the bytes
+            // Write the required length to the target buffer
             var prefixContent = useHuffman ? (byte)0x80 : (byte)0;
-            var lenBytes = IntEncoder.Encode(byteView.Count, prefixContent, 7);
-            var total = new byte[lenBytes.Length + byteView.Count];
-            // Copy length
-            Array.Copy(lenBytes, total, lenBytes.Length);
-            // Copy string
-            Array.Copy(byteView.Array, 0, total, lenBytes.Length, byteView.Count);
+            var used = IntEncoder.EncodeInto(
+                new ArraySegment<byte>(buf.Array, offset, free),
+                encodedByteLen, prefixContent, 7);
+            if (used == 0) return 0; // Couldn't write length
+            offset += used;
+            free -= used;
 
-            return total;
+            if (useHuffman)
+            {
+                if (free < requiredHuffmanBytes) return 0;
+                // Use the huffman encoder to write bytes to target buffer
+                Huffman.Encode(
+                    new ArraySegment<byte>(huffmanInputBuf),
+                    new ArraySegment<byte>(buf.Array, offset, free));
+                offset += requiredHuffmanBytes;
+            }
+            else
+            {
+                if (free < valueByteLen) return 0;
+                // Use ASCII encoder to write byte to target buffer
+                Encoding.ASCII.GetBytes(
+                    value, 0, value.Length, buf.Array, offset);
+                offset += valueByteLen;
+            }
+
+            // Return the number amount of used bytes
+            return offset - buf.Offset;
+        }
+
+        /// <summary>
+        /// Encodes the given string.
+        /// This method should not be directly used since it allocates.
+        /// EncodeInto is preferred.
+        /// </summary>
+        /// <param name="value">The value to encode</param>
+        /// <param name="huffman">Controls the huffman encoding</param>
+        public static byte[] Encode(string value, HuffmanStrategy huffman)
+        {
+            // Estimate the size of the buffer
+            var asciiSize = Encoding.ASCII.GetByteCount(value);
+            var estimatedHeaderLength = IntEncoder.RequiredBytes(asciiSize, 0, 7);
+            var estimatedBufferSize = estimatedHeaderLength + asciiSize;
+
+            while (true)
+            {
+                // Create a buffer with some headroom
+                var buf = new byte[estimatedBufferSize + 16];
+                // Try to serialize value in there
+                var size = EncodeInto(
+                    new ArraySegment<byte>(buf), value, asciiSize, huffman);
+                if (size != 0)
+                {
+                    // Serialization was performed
+                    // Trim the buffer in order to return it
+                    if (size == buf.Length) return buf;
+                    var newBuf = new byte[size];
+                    Array.Copy(buf, 0, newBuf, 0, size);
+                    return newBuf;
+                }
+                else
+                {
+                    // Need more buffer space
+                    estimatedBufferSize = (estimatedBufferSize + 2) * 2;
+                }
+            }
         }
     }
 }

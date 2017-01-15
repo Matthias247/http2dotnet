@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Xunit;
 using Http2.Hpack;
 
@@ -6,6 +8,27 @@ namespace HpackTests
     public class EncoderTests
     {
         const int MaxFrameSize = 65535;
+
+        struct EncodeResult
+        {
+            public byte[] Bytes;
+            public int FieldCount;
+        }
+        
+        private EncodeResult EncodeToTempBuf(
+            Encoder encoder, IEnumerable<HeaderField> headers, int maxSize)
+        {
+            var buf = new byte[maxSize];
+            var res = encoder.EncodeInto(new ArraySegment<byte>(buf), headers);
+            // Clamp the bytes
+            var newBuf = new byte[res.UsedBytes];
+            Array.Copy(buf, 0, newBuf, 0, res.UsedBytes);
+            return new EncodeResult
+            {
+                Bytes = newBuf,
+                FieldCount = res.FieldCount,
+            };
+        }
 
         [Fact]
         public void ShouldHaveADefaultDynamicTableSizeOf4096()
@@ -46,7 +69,7 @@ namespace HpackTests
                 "400a637573746f6d2d6b65790d637573" +
                 "746f6d2d686561646572");
 
-            var res = encoder.Encode(fields, MaxFrameSize);
+            var res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(1, res.FieldCount);
             Assert.Equal(55, encoder.DynamicTableUsedSize);
@@ -69,7 +92,7 @@ namespace HpackTests
             var result = new Buffer();
             result.AddHexString("040c2f73616d706c652f70617468");
 
-            var res = encoder.Encode(fields, MaxFrameSize);
+            var res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(1, res.FieldCount);
             Assert.Equal(0, encoder.DynamicTableUsedSize);
@@ -89,7 +112,7 @@ namespace HpackTests
             var result = new Buffer();
             result.AddHexString("100870617373776f726406736563726574");
 
-            var res = encoder.Encode(fields, MaxFrameSize);
+            var res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(1, res.FieldCount);
             Assert.Equal(0, encoder.DynamicTableUsedSize);
@@ -109,7 +132,7 @@ namespace HpackTests
             var result = new Buffer();
             result.AddHexString("82");
 
-            var res = encoder.Encode(fields, MaxFrameSize);
+            var res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(1, res.FieldCount);
             Assert.Equal(0, encoder.DynamicTableUsedSize);
@@ -133,7 +156,7 @@ namespace HpackTests
             var result = new Buffer();
             result.AddHexString("828684410f7777772e6578616d706c652e636f6d");
 
-            var res = encoder.Encode(fields, MaxFrameSize);
+            var res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(4, res.FieldCount);
             Assert.Equal(57, encoder.DynamicTableUsedSize);
@@ -150,7 +173,7 @@ namespace HpackTests
             result = new Buffer();
             result.AddHexString("828684be58086e6f2d6361636865");
 
-            res = encoder.Encode(fields, MaxFrameSize);
+            res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(5, res.FieldCount);
             Assert.Equal(110, encoder.DynamicTableUsedSize);
@@ -167,7 +190,7 @@ namespace HpackTests
             result = new Buffer();
             result.AddHexString("828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565");
 
-            res = encoder.Encode(fields, MaxFrameSize);
+            res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(5, res.FieldCount);
             Assert.Equal(164, encoder.DynamicTableUsedSize);
@@ -191,7 +214,7 @@ namespace HpackTests
             var result = new Buffer();
             result.AddHexString("828684418cf1e3c2e5f23a6ba0ab90f4ff");
 
-            var res = encoder.Encode(fields, MaxFrameSize);
+            var res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(4, res.FieldCount);
             Assert.Equal(57, encoder.DynamicTableUsedSize);
@@ -208,7 +231,7 @@ namespace HpackTests
             result = new Buffer();
             result.AddHexString("828684be5886a8eb10649cbf");
 
-            res = encoder.Encode(fields, MaxFrameSize);
+            res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(5, res.FieldCount);
             Assert.Equal(110, encoder.DynamicTableUsedSize);
@@ -225,7 +248,7 @@ namespace HpackTests
             result = new Buffer();
             result.AddHexString("828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf");
 
-            res = encoder.Encode(fields, MaxFrameSize);
+            res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(5, res.FieldCount);
             Assert.Equal(164, encoder.DynamicTableUsedSize);
@@ -255,7 +278,7 @@ namespace HpackTests
                 "747470733a2f2f7777772e6578616d70" +
                 "6c652e636f6d");
 
-            var res = encoder.Encode(fields, MaxFrameSize);
+            var res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(4, res.FieldCount);
             Assert.Equal(222, encoder.DynamicTableUsedSize);
@@ -271,7 +294,7 @@ namespace HpackTests
             result = new Buffer();
             result.AddHexString("4803333037c1c0bf");
 
-            res = encoder.Encode(fields, MaxFrameSize);
+            res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(4, res.FieldCount);
             Assert.Equal(222, encoder.DynamicTableUsedSize);
@@ -296,7 +319,7 @@ namespace HpackTests
                 "67653d333630303b2076657273696f6e" +
                 "3d31");
 
-            res = encoder.Encode(fields, MaxFrameSize);
+            res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(6, res.FieldCount);
             Assert.Equal(215, encoder.DynamicTableUsedSize);
@@ -326,7 +349,7 @@ namespace HpackTests
                 "2d1bff6e919d29ad171863c78f0b97c8" +
                 "e9ae82ae43d3");
 
-            var res = encoder.Encode(fields, MaxFrameSize);
+            var res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(4, res.FieldCount);
             Assert.Equal(222, encoder.DynamicTableUsedSize);
@@ -342,7 +365,7 @@ namespace HpackTests
             result = new Buffer();
             result.AddHexString("4883640effc1c0bf");
 
-            res = encoder.Encode(fields, MaxFrameSize);
+            res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(4, res.FieldCount);
             Assert.Equal(222, encoder.DynamicTableUsedSize);
@@ -365,11 +388,16 @@ namespace HpackTests
                 "3960d5af27087f3672c1ab270fb5291f" +
                 "9587316065c003ed4ee5b1063d5007");
 
-            res = encoder.Encode(fields, MaxFrameSize);
+            res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);
             Assert.Equal(6, res.FieldCount);
             Assert.Equal(215, encoder.DynamicTableUsedSize);
             Assert.Equal(3, encoder.DynamicTableLength);
         }
+
+        // TODO: Add tests to verify that the encoder stops encoding when data
+        // doesn't fit into a heaer block
+        // Ideally check at various positions, since the out-of-memory-problem
+        // can happen anywhere.
     }
 }

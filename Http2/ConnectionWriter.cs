@@ -772,16 +772,18 @@ namespace Http2
             while (true)
             {
                 // Encode a header block fragment and copy it to the output buffer
-                var encodeResult = this.hEncoder.Encode(headers, maxFrameSize);
-                Array.Copy(
-                    encodeResult.Bytes, 0,
-                    outBuf, FrameHeader.HeaderSize,
-                    encodeResult.Bytes.Length);
+                var headerBlockFragment = new ArraySegment<byte>(
+                    outBuf, FrameHeader.HeaderSize, maxFrameSize - FrameHeader.HeaderSize);
+                var encodeResult = this.hEncoder.EncodeInto(
+                    headerBlockFragment, headers);
+
+                // TODO: Check if we couldn't even encode a single header
+
                 sentHeaders += encodeResult.FieldCount;
                 var remaining = nrTotalHeaders - sentHeaders;
 
                 FrameHeader hdr = wr.Header;
-                hdr.Length = encodeResult.Bytes.Length;
+                hdr.Length = encodeResult.UsedBytes;
                 if (!isContinuation)
                 {
                     hdr.Type = FrameType.Headers;
@@ -809,7 +811,7 @@ namespace Http2
                 // Serialize the frame header and write it together with the header block
                 hdr.EncodeInto(headerView);
                 var dataView = new ArraySegment<byte>(
-                    outBuf, 0, FrameHeader.HeaderSize + encodeResult.Bytes.Length);
+                    outBuf, 0, FrameHeader.HeaderSize + encodeResult.UsedBytes);
                 await this.outStream.WriteAsync(dataView);
 
                 if (remaining == 0)

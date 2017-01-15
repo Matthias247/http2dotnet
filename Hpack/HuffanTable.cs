@@ -4,21 +4,24 @@ namespace Http2.Hpack
 {
     static class HuffmanTree
     {
-        /** A node in the binary huffman tree */
+        /// <summary>
+        /// A node in the binary huffman tree
+        /// </summary>
         public class TreeNode
         {
-            /// <summary> Tree branch that is taken when decoder encounters 0</summary>
+            /// <summary>Tree branch that is taken when decoder encounters 0</summary>
             public TreeNode Child0;
-            /// <summary> Tree branch that is taken when decoder encounters 1</summary>
+            /// <summary>Tree branch that is taken when decoder encounters 1</summary>
             public TreeNode Child1;
             /// <summary>
             /// The value of the node. This is only set in leaf nodes.
             /// Might also be ushort, since the max value is 256.
             /// However currently -1 depicts that no value is set for the node.
             /// </summary>
-            public int Value; // 
+            public int Value;
         }
 
+        /// <summary>The root of the tree</summary>
         public static readonly TreeNode Root;
 
         static HuffmanTree()
@@ -54,7 +57,7 @@ namespace Http2.Hpack
             }
             else
             {
-                // Remaining data of the tree
+                // Value must be inserted deeper within the tree
                 // Reset the first bit
                 var rem = bin & ((1 << (len - 1)) - 1);
                 if (child == null)
@@ -70,6 +73,10 @@ namespace Http2.Hpack
         }
     }
 
+    /// <summary>
+    /// This class contains a representation of the Huffman table according to
+    /// the HPACK specification
+    /// </summary>
     static class HuffmanTable
     {
         /// <summary>

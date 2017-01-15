@@ -8,52 +8,100 @@ namespace Http2.Hpack
     public static class IntEncoder
     {
         /// <summary>
-        /// Encodes the given number
+        /// Returns the number of bytes that is required for encoding
+        /// the given value.
         /// </summary>
         /// <param name="value">The value to encode</param>
         /// <param name="beforePrefix">The value that is stored in the same byte as the prefix</param>
         /// <param name="prefixBits">The number of bits that shall be used for the prefix</param>
-        public static byte[] Encode(int value, byte beforePrefix, int prefixBits)
+        /// <returns>The number of required bytes</returns>
+        public static int RequiredBytes(int value, byte beforePrefix, int prefixBits)
         {
             if (value < 0) throw new ArgumentOutOfRangeException(nameof(value));
-            //uint val = (uint)value;
 
-            var buf = new byte[8]; // Will never need more than this for 32bit numbers
             var offset = 0;
-            // TODO: Buffer pooling
 
             // Calculate the maximum value that fits into the prefix
             int maxPrefixVal = ((1 << prefixBits) - 1); // equals 2^N - 1
             if (value < maxPrefixVal) {
                 // Value fits into the prefix
-                buf[offset] = (byte)((beforePrefix | value) & 0xFF);
                 offset++;
             } else {
-                // Value does not fit into prefix
-                // Save the max prefix value
-                buf[offset] = (byte)((beforePrefix | maxPrefixVal) & 0xFF);
                 offset++;
                 value -= maxPrefixVal;
                 while (value >= 128)
                 {
-                    var part = (value % 128 + 128);
-                    buf[offset] = (byte)(part & 0xFF);
                     offset++;
                     value = value / 128; // Shift is not valid above 32bit
                 }
-                buf[offset] = (byte)(value & 0xFF);
                 offset++;
             }
 
-            // We need only offset bytes from the total result
-            if (offset != buf.Length)
-            {
-                var newBuf = new byte[offset];
-                Array.Copy(buf, newBuf, offset);
-                buf = newBuf;
+            return offset;
+        }
+
+        /// <summary>
+        /// Encodes the given number into the target buffer
+        /// </summary>
+        /// <param name="buf">The target buffer for encoding the value</param>
+        /// <param name="value">The value to encode</param>
+        /// <param name="beforePrefix">The value that is stored in the same byte as the prefix</param>
+        /// <param name="prefixBits">The number of bits that shall be used for the prefix</param>
+        /// <returns>
+        /// The number of bytes that were required to encode the value.
+        /// 0 if the value did not fit into the buffer.
+        /// </returns>
+        public static int EncodeInto(
+            ArraySegment<byte> buf, int value, byte beforePrefix, int prefixBits)
+        {
+            if (value < 0) throw new ArgumentOutOfRangeException(nameof(value));
+
+            var offset = buf.Offset;
+            int free = buf.Count;
+            if (free < 1) return 0;
+
+            // Calculate the maximum value that fits into the prefix
+            int maxPrefixVal = ((1 << prefixBits) - 1); // equals 2^N - 1
+            if (value < maxPrefixVal) {
+                // Value fits into the prefix
+                buf.Array[offset] = (byte)((beforePrefix | value) & 0xFF);
+                offset++;
+            } else {
+                // Value does not fit into prefix
+                // Save the max prefix value
+                buf.Array[offset] = (byte)((beforePrefix | maxPrefixVal) & 0xFF);
+                offset++;
+                free--;
+                if (free < 1) return 0;
+                value -= maxPrefixVal;
+                while (value >= 128)
+                {
+                    var part = (value % 128 + 128);
+                    buf.Array[offset] = (byte)(part & 0xFF);
+                    offset++;
+                    free--;
+                    if (free < 1) return 0;
+                    value = value / 128; // Shift is not valid above 32bit
+                }
+                buf.Array[offset] = (byte)(value & 0xFF);
+                offset++;
             }
 
-            return buf;
+            return offset - buf.Offset;
+        }
+
+        /// <summary>
+        /// Encodes the given number.
+        /// </summary>
+        /// <param name="value">The value to encode</param>
+        /// <param name="beforePrefix">The value that is stored in the same byte as the prefix</param>
+        /// <param name="prefixBits">The number of bits that shall be used for the prefix</param>
+        /// <returns>The encoded number</returns>
+        public static byte[] Encode(int value, byte beforePrefix, int prefixBits)
+        {
+            var bytes = new byte[RequiredBytes(value, beforePrefix, prefixBits)];
+            EncodeInto(new ArraySegment<byte>(bytes), value, beforePrefix, prefixBits);
+            return bytes;
         }
     }
 }
