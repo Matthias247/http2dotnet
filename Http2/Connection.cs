@@ -142,11 +142,18 @@ namespace Http2
                 }
             );
 
+            // Clamp the dynamic table size limit to int range
+            var dynTableSizeLimit = Math.Min(LocalSettings.HeaderTableSize, int.MaxValue);
+
             HeaderReader = new HeaderReader(
                 new Hpack.Decoder(new Hpack.Decoder.Options
                 {
-                    // Use the default options here as long as this is not configurable
-                    DynamicTableSizeLimit = (int)LocalSettings.HeaderTableSize,
+                    // Remark: The dynamic table size is set to the default
+                    // value of 4096 if not configured here.
+                    // Configuring it and setting it to something different
+                    // makes no sense, as the remote expects the default size
+                    // at start
+                    DynamicTableSizeLimit = (int)dynTableSizeLimit,
                 }),
                 LocalSettings.MaxFrameSize,
                 LocalSettings.MaxHeaderListSize,

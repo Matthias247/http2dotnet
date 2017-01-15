@@ -161,7 +161,7 @@ namespace Http2
             }
 
             var b = data.Array;
-            for (var o = data.Offset; o <= data.Offset + data.Count; o++)
+            for (var o = data.Offset; o < data.Offset + data.Count; o = o+6)
             {
                 // Extract ID and value
                 var id =(ushort)(
