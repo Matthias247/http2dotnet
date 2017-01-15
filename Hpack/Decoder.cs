@@ -265,7 +265,8 @@ namespace Http2.Hpack
         }
 
         /// <summary>
-        /// Processes a chunk of HPACK bytes
+        /// Processes a chunk of HPACK bytes.
+        /// This method can throw exceptions on decoding errors.
         /// </summary>
         /// <returns>The number of processed bytes</returns>
         public int Decode(ArraySegment<byte> input)
@@ -546,6 +547,7 @@ namespace Http2.Hpack
             Success = 0,
             MaxHeaderListSizeExceeded = 1,
             IncompleteHeaderBlockFragment = 2,
+            InvalidHeaderBlockFragment = 3,
         }
 
         /// <summary>
@@ -587,35 +589,56 @@ namespace Http2.Hpack
             int length = buffer.Count;
             uint headersSize = 0;
 
-            while (length > 0)
+            try
             {
-                var segment = new ArraySegment<byte>(buffer.Array, offset, length);
-                var consumed = decoder.Decode(segment);
-                offset += consumed;
-                length -= consumed;
-                if (decoder.Done)
+                while (length > 0)
                 {
-                    headersSize += (uint)decoder.HeaderSize;
-                    if (headersSize > maxHeaderFieldsSize)
+                    var segment = new ArraySegment<byte>(buffer.Array, offset, length);
+                    var consumed = decoder.Decode(segment);
+                    offset += consumed;
+                    length -= consumed;
+                    if (decoder.Done)
                     {
-                        // Revert the size update. We haven't added the field
-                        // to the list
-                        headersSize -= (uint)decoder.HeaderSize;
-                        return new DecodeFragmentResult
+                        headersSize += (uint)decoder.HeaderSize;
+                        if (headersSize > maxHeaderFieldsSize)
                         {
-                            Status = DecodeStatus.MaxHeaderListSizeExceeded,
-                            HeaderFieldsSize = headersSize,
-                        };
+                            // Revert the size update. We haven't added the field
+                            // to the list
+                            headersSize -= (uint)decoder.HeaderSize;
+                            return new DecodeFragmentResult
+                            {
+                                Status = DecodeStatus.MaxHeaderListSizeExceeded,
+                                HeaderFieldsSize = headersSize,
+                            };
+                        }
+                        headers.Add(decoder.HeaderField);
                     }
-                    headers.Add(decoder.HeaderField);
+                    else
+                    {
+                        // This can happen if the last element of the header block
+                        // is a TableUpdate instruction. In other cases this is invalid
+                        if (length != 0)
+                        {
+                            return new DecodeFragmentResult
+                            {
+                                Status = DecodeStatus.IncompleteHeaderBlockFragment,
+                                HeaderFieldsSize = headersSize,
+                            };
+                        }
+                        // Decoding is complete - length is 0
+                        break;
+                    }
                 }
-                else
+            }
+            catch (Exception)
+            {
+                // The HPACK decoder will throw various exceptions if size checks
+                // fail. We convert these to an error status here.
+                return new DecodeFragmentResult
                 {
-                    // This can happen if the last element of the header block
-                    // is a TableUpdate instruction
-                    // TODO: Assert here that contentLen == 0?
-                    break;
-                }
+                    Status = DecodeStatus.InvalidHeaderBlockFragment,
+                    HeaderFieldsSize = headersSize,
+                };
             }
 
             // Check if the HeaderBlockFragment has correctly ended
