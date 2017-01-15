@@ -24,7 +24,7 @@ namespace Http2
     /// <summary>
     /// A HTTP/2 stream
     /// </summary>
-    public interface IStream : IStreamReader, IStreamWriterCloser
+    public interface IStream : IStreamReader, IStreamWriterCloser, IDisposable
     {
         /// <summary>The ID of the stream</summary>
         uint Id { get; }

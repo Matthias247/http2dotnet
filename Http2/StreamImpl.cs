@@ -234,6 +234,12 @@ namespace Http2
             // logging
         }
 
+        public void Dispose()
+        {
+            // Disposing a stream is equivalent to resetting it
+            Cancel();
+        }
+
         internal ValueTask<ConnectionWriter.WriteResult> Reset(
             ErrorCode errorCode, bool fromRemote)
         {
@@ -287,7 +293,7 @@ namespace Http2
 
             // Unregister from the connection
             // If this has happened from the remote side the connection will
-            //already have performed this
+            // already have performed this
             if (!fromRemote)
             {
                 this.connection.UnregisterStream(this);
