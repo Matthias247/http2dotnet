@@ -42,7 +42,7 @@ namespace Http2.Hpack
         /// <param name="huffman">Controls the huffman encoding</param>
         /// <returns>
         /// The number of bytes that were required to encode the value.
-        /// 0 if the value did not fit into the buffer.
+        /// -1 if the value did not fit into the buffer.
         /// </returns>
         public static int EncodeInto(
             ArraySegment<byte> buf,
@@ -51,7 +51,7 @@ namespace Http2.Hpack
             var offset = buf.Offset;
             var free = buf.Count;
             // Fast check for free space. Doesn't need to be exact
-            if (free < 1 + valueByteLen) return 0;
+            if (free < 1 + valueByteLen) return -1;
 
             var encodedByteLen = valueByteLen;
             var requiredHuffmanBytes = 0;
@@ -80,26 +80,27 @@ namespace Http2.Hpack
             var used = IntEncoder.EncodeInto(
                 new ArraySegment<byte>(buf.Array, offset, free),
                 encodedByteLen, prefixContent, 7);
-            if (used == 0) return 0; // Couldn't write length
+            if (used == -1) return -1; // Couldn't write length
             offset += used;
             free -= used;
 
             if (useHuffman)
             {
-                if (free < requiredHuffmanBytes) return 0;
+                if (free < requiredHuffmanBytes) return -1;
                 // Use the huffman encoder to write bytes to target buffer
-                Huffman.Encode(
-                    new ArraySegment<byte>(huffmanInputBuf),
-                    new ArraySegment<byte>(buf.Array, offset, free));
-                offset += requiredHuffmanBytes;
+                used = Huffman.EncodeInto(
+                    new ArraySegment<byte>(buf.Array, offset, free),
+                    new ArraySegment<byte>(huffmanInputBuf));
+                if (used == -1) return -1; // Couldn't write length
+                offset += used;
             }
             else
             {
-                if (free < valueByteLen) return 0;
-                // Use ASCII encoder to write byte to target buffer
-                Encoding.ASCII.GetBytes(
+                if (free < valueByteLen) return -1;
+                // Use ASCII encoder to write bytes to target buffer
+                used = Encoding.ASCII.GetBytes(
                     value, 0, value.Length, buf.Array, offset);
-                offset += valueByteLen;
+                offset += used;
             }
 
             // Return the number amount of used bytes
@@ -127,7 +128,7 @@ namespace Http2.Hpack
                 // Try to serialize value in there
                 var size = EncodeInto(
                     new ArraySegment<byte>(buf), value, asciiSize, huffman);
-                if (size != 0)
+                if (size != -1)
                 {
                     // Serialization was performed
                     // Trim the buffer in order to return it

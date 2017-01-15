@@ -120,6 +120,11 @@ namespace Http2.Hpack
         /// fields as well as an information how many fields were encoded.
         /// If not all fields were encoded these should be encoded into a
         /// seperate header block.
+        /// If the input headers list was bigger than 0 and 0 encoded headers
+        /// are reported as a result this means the target buffer is too small
+        /// for encoding even a single header field. In this case using
+        /// continuation frames won't help, as they header field also wouldn't
+        /// fit there.
         /// </summary>
         /// <returns>The used bytes and number of encoded headers</returns>
         public Result EncodeInto(
@@ -148,7 +153,7 @@ namespace Http2.Hpack
                     var used = IntEncoder.EncodeInto(
                         new ArraySegment<byte>(buf.Array, tempOffset, count),
                         idx, 0x80, 7);
-                    if (used == 0) break;
+                    if (used == -1) break;
                     tempOffset += used;
                     count -= used;
                 }
@@ -189,7 +194,7 @@ namespace Http2.Hpack
                             var used = IntEncoder.EncodeInto(
                                 new ArraySegment<byte>(buf.Array, tempOffset, count),
                                 idx, 0x40, 6);
-                            if (used == 0) break;
+                            if (used == -1) break;
                             tempOffset += used;
                             count -= used;
                         }
@@ -203,7 +208,7 @@ namespace Http2.Hpack
                             var used = StringEncoder.EncodeInto(
                                 new ArraySegment<byte>(buf.Array, tempOffset, count),
                                 header.Name, nameLen, this._huffmanStrategy);
-                            if (used == 0) break;
+                            if (used == -1) break;
                             tempOffset += used;
                             count -= used;
                         }
@@ -218,7 +223,7 @@ namespace Http2.Hpack
                             var used = IntEncoder.EncodeInto(
                                 new ArraySegment<byte>(buf.Array, tempOffset, count),
                                 idx, 0x00, 4);
-                            if (used == 0) break;
+                            if (used == -1) break;
                             tempOffset += used;
                             count -= used;
                         }
@@ -232,7 +237,7 @@ namespace Http2.Hpack
                             var used = StringEncoder.EncodeInto(
                                 new ArraySegment<byte>(buf.Array, tempOffset, count),
                                 header.Name, nameLen, this._huffmanStrategy);
-                            if (used == 0) break;
+                            if (used == -1) break;
                             tempOffset += used;
                             count -= used;
                         }
@@ -245,7 +250,7 @@ namespace Http2.Hpack
                             var used = IntEncoder.EncodeInto(
                                 new ArraySegment<byte>(buf.Array, offset, count),
                                 idx, 0x10, 4);
-                            if (used == 0) break;
+                            if (used == -1) break;
                             tempOffset += used;
                             count -= used;
                         }
@@ -259,7 +264,7 @@ namespace Http2.Hpack
                             var used = StringEncoder.EncodeInto(
                                 new ArraySegment<byte>(buf.Array, tempOffset, count),
                                 header.Name, nameLen, this._huffmanStrategy);
-                            if (used == 0) break;
+                            if (used == -1) break;
                             tempOffset += used;
                             count -= used;
                         }
@@ -269,7 +274,7 @@ namespace Http2.Hpack
                     var usedForValue = StringEncoder.EncodeInto(
                         new ArraySegment<byte>(buf.Array, tempOffset, count),
                         header.Value, valLen, this._huffmanStrategy);
-                    if (usedForValue == 0) break;
+                    if (usedForValue == -1) break;
                     // Writing the value succeeded
                     tempOffset += usedForValue;
                     count -= usedForValue;

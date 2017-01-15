@@ -115,17 +115,23 @@ namespace Http2.Hpack
         /// the specified offset.
         /// The required size can be calculated with Huffman.EncodedLength
         /// </summary>
-        public static ArraySegment<byte> Encode(ArraySegment<byte> input, ArraySegment<byte> output)
+        /// <returns>
+        /// The number of bytes that are used in the buffer for the encoded
+        /// string. Will return -1 if there was not enough free space for encoding
+        /// </returns>
+        public static int EncodeInto(
+            ArraySegment<byte> buf,
+            ArraySegment<byte> bytes)
         {
-            if (input.Count == 0) return input;
+            if (bytes.Count == 0) return 0;
 
             var bitOffset = 0;
-            var byteOffset = output.Offset;
+            var byteOffset = buf.Offset;
 
-            for (var i = input.Offset; i  < input.Offset + input.Count; i++)
+            for (var i = bytes.Offset; i  < bytes.Offset + bytes.Count; i++)
             {
                 // Lookup the corresponding value in the table
-                var tableEntry = HuffmanTable.Entries[input.Array[i]];
+                var tableEntry = HuffmanTable.Entries[bytes.Array[i]];
                 var binVal = tableEntry.Bin;
                 var bits = tableEntry.Len;
 
@@ -138,7 +144,7 @@ namespace Http2.Hpack
 
                     var val = 0;
                     if (bitOffset == 0) val = 0;
-                    else val = output.Array[byteOffset]; // read written value
+                    else val = buf.Array[byteOffset]; // read written value
 
                     // Take the bitsToPut highest bits from binVal
                     var putBytes = binVal >> (bits - bitsToPut);
@@ -148,7 +154,7 @@ namespace Http2.Hpack
                     // This can not be directly combined with the former operation,
                     // because otherwise the trailing numbers wouldn't be zeroed
                     val = val | (putBytes >> bitOffset);
-                    output.Array[byteOffset] = (byte)(val & 0xFF);
+                    buf.Array[byteOffset] = (byte)(val & 0xFF);
                     bitOffset += bitsToPut;
                     if (bitOffset == 8)
                     {
@@ -165,14 +171,12 @@ namespace Http2.Hpack
             if (bitOffset != 0)
             {
                 var val = (1 << (8-bitOffset)) - 1;
-                val |= output.Array[byteOffset];
-                output.Array[byteOffset] = (byte)(val & 0xFF);
+                val |= buf.Array[byteOffset];
+                buf.Array[byteOffset] = (byte)(val & 0xFF);
                 byteOffset++;
             }
 
-            return new ArraySegment<byte>(
-                output.Array, output.Offset, byteOffset - output.Offset
-            );
+            return byteOffset - buf.Offset;
         }
     }
 }

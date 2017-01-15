@@ -49,7 +49,7 @@ namespace Http2.Hpack
         /// <param name="prefixBits">The number of bits that shall be used for the prefix</param>
         /// <returns>
         /// The number of bytes that were required to encode the value.
-        /// 0 if the value did not fit into the buffer.
+        /// -1 if the value did not fit into the buffer.
         /// </returns>
         public static int EncodeInto(
             ArraySegment<byte> buf, int value, byte beforePrefix, int prefixBits)
@@ -58,7 +58,7 @@ namespace Http2.Hpack
 
             var offset = buf.Offset;
             int free = buf.Count;
-            if (free < 1) return 0;
+            if (free < 1) return -1;
 
             // Calculate the maximum value that fits into the prefix
             int maxPrefixVal = ((1 << prefixBits) - 1); // equals 2^N - 1
@@ -72,7 +72,7 @@ namespace Http2.Hpack
                 buf.Array[offset] = (byte)((beforePrefix | maxPrefixVal) & 0xFF);
                 offset++;
                 free--;
-                if (free < 1) return 0;
+                if (free < 1) return -1;
                 value -= maxPrefixVal;
                 while (value >= 128)
                 {
@@ -80,7 +80,7 @@ namespace Http2.Hpack
                     buf.Array[offset] = (byte)(part & 0xFF);
                     offset++;
                     free--;
-                    if (free < 1) return 0;
+                    if (free < 1) return -1;
                     value = value / 128; // Shift is not valid above 32bit
                 }
                 buf.Array[offset] = (byte)(value & 0xFF);

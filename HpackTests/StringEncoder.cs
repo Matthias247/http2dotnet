@@ -6,6 +6,28 @@ namespace HpackTests
     public class StringEncoderTests
     {
         [Fact]
+        public void ShouldEncodeEmptyStringsWithoutHuffmanEncoding()
+        {
+            var testStr = "";
+            var bytes = StringEncoder.Encode(testStr, HuffmanStrategy.Never);
+            Assert.Equal(1, bytes.Length);
+
+            // Compare the bytes
+            Assert.Equal(0x00, bytes[0]);
+        }
+
+        [Fact]
+        public void ShouldEncodeEmptyStringsWithHuffmanEncoding()
+        {
+            var testStr = "";
+            var bytes = StringEncoder.Encode(testStr, HuffmanStrategy.Always);
+            Assert.Equal(1, bytes.Length);
+
+            // Compare the bytes
+            Assert.Equal(0x80, bytes[0]);
+        }
+
+        [Fact]
         public void ShouldEncodeStringsWithoutHuffmanEncoding()
         {
             var testStr = "Hello World";
@@ -88,7 +110,7 @@ namespace HpackTests
         public void ShouldApplyHuffmanEncodingIfStringGetsSmaller()
         {
             var testStr = "test"; // 01001 00101 01000 01001 => 01001001 01010000 1001
-            
+
             var bytes = StringEncoder.Encode(testStr, HuffmanStrategy.IfSmaller);
             Assert.Equal(4, bytes.Length);
 
@@ -103,7 +125,7 @@ namespace HpackTests
         public void ShouldNotApplyHuffmanEncodingIfStringDoesNotGetSmaller()
         {
             var testStr = "XZ"; // 11111100 11111101
-            
+
             var bytes = StringEncoder.Encode(testStr, HuffmanStrategy.IfSmaller);
             Assert.Equal(3, bytes.Length);
 
