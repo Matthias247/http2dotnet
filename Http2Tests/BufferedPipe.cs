@@ -7,7 +7,7 @@ using Xunit;
 
 namespace Http2Tests
 {
-    public class BufferedPipe : IStreamWriter, IStreamReader, IStreamCloser
+    public class BufferedPipe : IStreamWriter, IStreamReader, IStreamCloser, IStreamWriterCloser
     {
         public byte[] Buffer;
         public int Written = 0;
@@ -47,7 +47,13 @@ namespace Http2Tests
             {
                 // Everything was consumed
                 Written = 0;
-                canRead.Reset();
+                if (!IsClosed)
+                {
+                    // Block the read only if the pipe is not closed
+                    // Otherwise the reader has to read the EndOfStream
+                    // info in the next iteration.
+                    canRead.Reset();
+                }
             }
             else
             {
@@ -57,10 +63,13 @@ namespace Http2Tests
                 Written -= toCopy;
             }
 
+            // Determine whether to wakeup the writer
+            var wakeupWriter = Written != Buffer.Length;
+
             mr.Release();
 
             // Wakeup the writer if he is waiting and there is free space
-            if (Written != Buffer.Length)
+            if (wakeupWriter)
             {
                 canWrite.Set();
             }
@@ -103,7 +112,11 @@ namespace Http2Tests
         {
             await canWrite;
             await mr.WaitAsync();
-            if (IsClosed) throw new Exception("Write on closed stream");
+            if (IsClosed)
+            {
+                mr.Release();
+                throw new Exception("Write on closed stream");
+            }
             var free = Buffer.Length - Written;
             var toCopy = Math.Min(free, buffer.Count);
             Array.Copy(buffer.Array, buffer.Offset, Buffer, Written, toCopy);
@@ -131,7 +144,9 @@ namespace Http2Tests
             await mr.WaitAsync();
             IsClosed = true;
             mr.Release();
+
             canRead.Set();
+            canWrite.Set();
             return null;
         }
     }
@@ -242,6 +257,31 @@ namespace Http2Tests
             Assert.Equal(0, res.BytesRead);
             // The writeTask should also finish
             await writeTask;
+        }
+
+        [Fact]
+        public async Task CloseShouldAllowRemainingDataToBeReadBeforeSignalClose()
+        {
+            var p = new BufferedPipe(128);
+            var input = new byte[20];
+            var output = new byte[10];
+            for (var i = 0; i < 20; i++) input[i] = (byte)i;
+            await p.WriteAsync(new ArraySegment<byte>(input));
+            await p.CloseAsync();
+
+            var res = await p.ReadAsync(new ArraySegment<byte>(output));
+            Assert.Equal(false, res.EndOfStream);
+            Assert.Equal(10, res.BytesRead);
+            for (var i = 0; i < 10; i++) Assert.Equal(i, output[i]);
+
+            res = await p.ReadAsync(new ArraySegment<byte>(output));
+            Assert.Equal(false, res.EndOfStream);
+            Assert.Equal(10, res.BytesRead);
+            for (var i = 0; i < 10; i++) Assert.Equal(i+10, output[i]);
+
+            res = await p.ReadAsync(new ArraySegment<byte>(output));
+            Assert.Equal(true, res.EndOfStream);
+            Assert.Equal(0, res.BytesRead);
         }
 
         [Fact]
