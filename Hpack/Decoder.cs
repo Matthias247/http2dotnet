@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 
 namespace Http2.Hpack
 {
@@ -529,6 +530,109 @@ namespace Http2.Hpack
             }
 
             return offset - buf.Offset;
+        }
+    }
+
+    /// <summary>
+    /// Extension methods for the HPACK decoder
+    /// </summary>
+    public static class DecoderExtensions
+    {
+        /// <summary>
+        /// The status of a DecodeHeaderBlockFragment operation
+        /// </summary>
+        public enum DecodeStatus
+        {
+            Success = 0,
+            MaxHeaderListSizeExceeded = 1,
+            IncompleteHeaderBlockFragment = 2,
+        }
+
+        /// <summary>
+        /// The result of a DecodeHeaderBlockFragment operation
+        /// </summary>
+        public struct DecodeFragmentResult
+        {
+            /// <summary>The status of the decode operation</summary>
+            public DecodeStatus Status;
+
+            /// <summary>
+            /// The total amount of header bytes that where decoded from this
+            /// single header block fragment
+            /// </summary>
+            public uint HeaderFieldsSize;
+        }
+
+        /// <summary>
+        /// Decodes a whole header block fragment using the given decoder.
+        /// </summary>
+        /// <param name="decoder">The HPACK decoder which is used</param>
+        /// <param name="buffer">The buffer which contains the header block fragment</param>
+        /// <param name="maxHeaderFieldsSize">
+        /// The maximum amount of header bytes that should be decoded from this
+        /// header block fragment. If the fragment contains more bytes decoding
+        /// will be stopped and an MaxHeaderListSizeExceeded error will be
+        /// returned.
+        /// </param>
+        /// <param name="headers">
+        /// The list of header blocks to which the decoded headers should be added
+        /// </param>
+        public static DecodeFragmentResult DecodeHeaderBlockFragment(
+            this Decoder decoder,
+            ArraySegment<byte> buffer,
+            uint maxHeaderFieldsSize,
+            List<HeaderField> headers)
+        {
+            int offset = buffer.Offset;
+            int length = buffer.Count;
+            uint headersSize = 0;
+
+            while (length > 0)
+            {
+                var segment = new ArraySegment<byte>(buffer.Array, offset, length);
+                var consumed = decoder.Decode(segment);
+                offset += consumed;
+                length -= consumed;
+                if (decoder.Done)
+                {
+                    headersSize += (uint)decoder.HeaderSize;
+                    if (headersSize > maxHeaderFieldsSize)
+                    {
+                        // Revert the size update. We haven't added the field
+                        // to the list
+                        headersSize -= (uint)decoder.HeaderSize;
+                        return new DecodeFragmentResult
+                        {
+                            Status = DecodeStatus.MaxHeaderListSizeExceeded,
+                            HeaderFieldsSize = headersSize,
+                        };
+                    }
+                    headers.Add(decoder.HeaderField);
+                }
+                else
+                {
+                    // This can happen if the last element of the header block
+                    // is a TableUpdate instruction
+                    // TODO: Assert here that contentLen == 0?
+                    break;
+                }
+            }
+
+            // Check if the HeaderBlockFragment has correctly ended
+            if (!decoder.HasInitialState)
+            {
+                return new DecodeFragmentResult
+                {
+                    Status = DecodeStatus.IncompleteHeaderBlockFragment,
+                    HeaderFieldsSize = headersSize,
+                };
+            }
+
+            return new DecodeFragmentResult
+            {
+                Status = DecodeStatus.Success,
+                HeaderFieldsSize = headersSize,
+            }; 
         }
     }
 }

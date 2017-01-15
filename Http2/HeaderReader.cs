@@ -83,7 +83,7 @@ namespace Http2
             }
 
             PriorityData? prioData = null;
-            var totalHeadersSize = 0u;
+            var allowedHeadersSize = maxHeaderFieldsSize;
             var headers = new List<HeaderField>();
             var initialFlags = firstHeader.Flags;
 
@@ -127,40 +127,12 @@ namespace Http2
             }
 
             // Decode headers from the first header block
-            while (contentLen > 0)
-            {
-                var segment = new ArraySegment<byte>(buffer, offset, contentLen);
-                var consumed = hpackDecoder.Decode(segment);
-                offset += consumed;
-                contentLen -= consumed;
-                if (hpackDecoder.Done)
-                {
-                    totalHeadersSize += (uint)hpackDecoder.HeaderSize;
-                    if (totalHeadersSize > maxHeaderFieldsSize)
-                    {
-                        return new Result
-                        {
-                            Error = new Http2Error
-                            {
-                                StreamId = 0,
-                                Code = ErrorCode.ProtocolError,
-                                Message = "Maximum header size exceeded",
-                            },
-                        };
-                    }
-                    headers.Add(hpackDecoder.HeaderField);
-                }
-                else
-                {
-                    // This can happen if the last element of the header block
-                    // is a TableUpdate instruction
-                    // TODO: Assert here that contentLen == 0?
-                    break;
-                }
-            }
+            var decodeResult = hpackDecoder.DecodeHeaderBlockFragment(
+                new ArraySegment<byte>(buffer, offset, contentLen),
+                allowedHeadersSize,
+                headers);
 
-            // Check if the HeaderBlockFragment has correctly ended
-            if (!hpackDecoder.HasInitialState)
+            if (decodeResult.Status != DecoderExtensions.DecodeStatus.Success)
             {
                 return new Result
                 {
@@ -168,10 +140,12 @@ namespace Http2
                     {
                         StreamId = 0,
                         Code = ErrorCode.ProtocolError,
-                        Message = "HeaderBlockFragment is incomplete",
+                        Message = decodeResult.Status.ToString(),
                     },
                 };
             }
+
+            allowedHeadersSize -= decodeResult.HeaderFieldsSize;
 
             while (!isEndOfHeaders)
             {
@@ -206,40 +180,14 @@ namespace Http2
 
                 offset = 0;
                 contentLen = contHeader.Length;
-                while (contentLen > 0)
-                {
-                    var segment = new ArraySegment<byte>(buffer, offset, contentLen);
-                    var consumed = hpackDecoder.Decode(segment);
-                    offset += consumed;
-                    contentLen -= consumed;
-                    if (hpackDecoder.Done)
-                    {
-                        totalHeadersSize += (uint)hpackDecoder.HeaderSize;
-                        if (totalHeadersSize > maxHeaderFieldsSize)
-                        {
-                            return new Result
-                            {
-                                Error = new Http2Error
-                                {
-                                    StreamId = 0,
-                                    Code = ErrorCode.ProtocolError,
-                                    Message = "Maximum header size exceeded",
-                                },
-                            };
-                        }
-                        headers.Add(hpackDecoder.HeaderField);
-                    }
-                    else
-                    {
-                        // This can happen if the last element of the header block
-                        // is a TableUpdate instruction
-                        // TODO: Assert here that contentLen == 0?
-                        break;
-                    }
-                }
 
-                // Check if the HeaderBlockFragment has correctly ended
-                if (!hpackDecoder.HasInitialState)
+                // Decode headers from the first header block
+                decodeResult = hpackDecoder.DecodeHeaderBlockFragment(
+                    new ArraySegment<byte>(buffer, offset, contentLen),
+                    allowedHeadersSize,
+                    headers);
+
+                if (decodeResult.Status != DecoderExtensions.DecodeStatus.Success)
                 {
                     return new Result
                     {
@@ -247,10 +195,12 @@ namespace Http2
                         {
                             StreamId = 0,
                             Code = ErrorCode.ProtocolError,
-                            Message = "HeaderBlockFragment is incomplete",
+                            Message = decodeResult.Status.ToString(),
                         },
                     };
                 }
+
+                allowedHeadersSize -= decodeResult.HeaderFieldsSize;
             }
 
             return new Result

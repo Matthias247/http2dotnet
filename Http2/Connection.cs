@@ -38,6 +38,8 @@ namespace Http2
             /// opened by the remote peer.
             /// The function should return true if it wants to handle the new
             /// stream and false otherwise.
+            /// Applications should handle the stream in another Task.
+            /// The Task from which this function is called may not be blocked.
             /// </summary>
             public Func<IStream, bool> StreamListener;
 
