@@ -777,7 +777,27 @@ namespace Http2
                 var encodeResult = this.hEncoder.EncodeInto(
                     headerBlockFragment, headers);
 
-                // TODO: Check if we couldn't even encode a single header
+                // If not a single header was encoded but there are headers remaining
+                // to be sent this is an error.
+                // It means the output buffer is not large enough to accomodate
+                // a single header field.
+                // Retrying it in a continuation frame
+                // - is not valid since it's not allowed to send an empty fragment
+                // - won't to better, since buffer size is the same
+                if (encodeResult.FieldCount == 0 && (nrTotalHeaders - sentHeaders) != 0)
+                {
+                    // Sending should be stopped and an error should be reported
+                    // to the sending application.
+                    // TODO: There's an open question how to do this gracefully
+                    // If the too large header field is encountered inside the
+                    // continuation frame the transmission of headers is already
+                    // in progress and can't be stopped.
+                    // So as an intermediate measure kill the connection in this
+                    // case by throwing an exception.
+                    throw new Exception(
+                        "Encountered too large HeaderField which can't be encoded " +
+                        "in a HTTP2 frame. Closing connection");
+                }
 
                 sentHeaders += encodeResult.FieldCount;
                 var remaining = nrTotalHeaders - sentHeaders;
