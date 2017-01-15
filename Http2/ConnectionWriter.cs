@@ -738,6 +738,10 @@ namespace Http2
             var headerView = new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize);
             wr.Header.EncodeInto(headerView);
             // Copy the settings payload data into the outgoing array, so we only have 1 write
+            // The size check is omitted here since the size of outBuf will always exceed
+            // the size of settings that we write.
+            // The minimal value for outBuf/maxFrameSize is 16kB.
+            // Settings are only 6 * 6 byte currently.
             Array.Copy(wr.Data.Array, wr.Data.Offset, outBuf, FrameHeader.HeaderSize, wr.Data.Count);
             var totalSize = FrameHeader.HeaderSize + wr.Data.Count;
             var data = new ArraySegment<byte>(outBuf, 0, totalSize);
@@ -961,9 +965,9 @@ namespace Http2
             // We just set the value
             lock (mutex)
             {
-                // Remark: Casts are valid, since the settings are validated before
-
                 // Update the maximum frame size
+                // Remark: The cast is valid, since the settings are validated before
+                // and the max MaxFrameSize fits into an integer.
                 this.options.MaxFrameSize = (int)remoteSettings.MaxFrameSize;
 
                 // remoteSettings.MaxHeaderListSize is currently not used
@@ -981,7 +985,11 @@ namespace Http2
                     // about that. However this this currently not supported.
                     // Additionally changing the size would cause a data race, as
                     // it is concurrently used by the writer process.
-                    // TODO: Fix that case
+                    // We can continue the old settings and hope that the remote
+                    // won't reset the connection. This will only affect compatibility
+                    // with systems that use and enforce a header table size lower
+                    // than the default one.
+                    // TODO: Support also this case
                 }
             }
         }

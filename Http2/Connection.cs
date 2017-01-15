@@ -360,12 +360,7 @@ namespace Http2
                     if (headerRes.Error != null) return headerRes.Error;
                     return await HandleHeaders(headerRes.HeaderData);
                 default:
-                    return new Http2Error
-                    {
-                        StreamId = 0,
-                        Code = ErrorCode.ProtocolError,
-                        Message = "Unexpected frame type",
-                    };
+                    return await HandleUnknownFrame(fh);
             }
         }
 
@@ -595,6 +590,34 @@ namespace Http2
                     Code = ErrorCode.ProtocolError,
                     Message = "Received unsupported PUSH_PROMISE frame",
                 });
+        }
+
+        /// <summary>
+        /// Handles frames that are not known to this HTTP/2 implementation.
+        /// From the specification:
+        /// Implementations MUST ignore and discard any frame that has a type
+        /// that is unknown.
+        /// </summary>
+        private async ValueTask<Http2Error?> HandleUnknownFrame(FrameHeader fh)
+        {
+            // Check frame size
+            if (fh.Length > LocalSettings.MaxFrameSize)
+            {
+                return new Http2Error
+                {
+                    StreamId = 0,
+                    Code = ErrorCode.FrameSizeError,
+                    Message = "Maximum frame size exceeded",
+                };
+            }
+
+            // Read data from the unknown frame into the receive buffer
+            await InputStream.ReadAll(
+                new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
+
+            // And discard it
+
+            return null;
         }
 
         private async ValueTask<Http2Error?> HandleGoAwayFrame(FrameHeader fh)
