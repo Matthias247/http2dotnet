@@ -36,14 +36,14 @@ namespace Http2
         uint maxHeaderFieldsSize;
         Decoder hpackDecoder;
         byte[] buffer;
-        IStreamReader reader;
+        IReadableByteStream reader;
         ILogger logger;
 
         public HeaderReader(
             Decoder hpackDecoder,
             uint maxFrameSize, uint maxHeaderFieldsSize,
             byte[] buffer,
-            IStreamReader reader,
+            IReadableByteStream reader,
             ILogger logger
         )
         {

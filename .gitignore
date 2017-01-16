@@ -1,1 +1,3 @@
 *.suo
+.vscode
+.vs

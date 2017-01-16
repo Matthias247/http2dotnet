@@ -4,9 +4,9 @@ using System.Threading.Tasks;
 namespace Http2
 {
     /// <summary>
-    /// Utility and extension functions for working with streams
+    /// Utility and extension functions for working with byte streams
     /// </summary>
-    public static class StreamUtils
+    public static class ByteStreamExtensions
     {
         /// <summary>
         /// Tries to read exactly the given amount of data from a stream.
@@ -19,7 +19,7 @@ namespace Http2
         /// <param name="buffer">The destination buffer</param>
         /// <returns>Awaitable task object</returns>
         public async static ValueTask<object> ReadAll(
-            this IStreamReader stream, ArraySegment<byte> buffer)
+            this IReadableByteStream stream, ArraySegment<byte> buffer)
         {
             var array = buffer.Array;
             var offset = buffer.Offset;

@@ -7,7 +7,9 @@ using Xunit;
 
 namespace Http2Tests
 {
-    public class BufferedPipe : IStreamWriter, IStreamReader, IStreamCloser, IStreamWriterCloser
+    public class BufferedPipe
+        : IWriteableByteStream, IReadableByteStream,
+          ICloseableByteStream, IWriteAndCloseableByteStream
     {
         public byte[] Buffer;
         public int Written = 0;
@@ -50,8 +52,8 @@ namespace Http2Tests
                 if (!IsClosed)
                 {
                     // Block the read only if the pipe is not closed
-                    // Otherwise the reader has to read the EndOfStream
-                    // info in the next iteration.
+                    // If closed the reading part must be able to read
+                    // the EndOfStream info in the next iteration.
                     canRead.Reset();
                 }
             }

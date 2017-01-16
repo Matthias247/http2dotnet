@@ -75,10 +75,10 @@ namespace Http2
         {
             HeaderTableSize = 0,
             EnablePush = false,
-            MaxConcurrentStreams = 1,
-            InitialWindowSize = 1,
+            MaxConcurrentStreams = 0,
+            InitialWindowSize = 0,
             MaxFrameSize = 16384,
-            MaxHeaderListSize = 1,
+            MaxHeaderListSize = 0,
         };
 
         /// <summary>
@@ -89,7 +89,7 @@ namespace Http2
             HeaderTableSize = uint.MaxValue,
             EnablePush = true,
             MaxConcurrentStreams = uint.MaxValue,
-            InitialWindowSize = uint.MaxValue,
+            InitialWindowSize = int.MaxValue,
             MaxFrameSize = 16777215,
             MaxHeaderListSize = uint.MaxValue,
         };
@@ -174,7 +174,11 @@ namespace Http2
                     | (uint)b[o + 5];
 
                 // Update the value
-                this.UpdateFieldById(id, value);
+                var err = this.UpdateFieldById(id, value);
+                if (err != null)
+                {
+                    return err;
+                }
             }
 
             return null;

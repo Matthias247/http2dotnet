@@ -108,7 +108,7 @@ namespace Http2
         /// Reads a frame header from the given stream
         /// </summary>
         public static async ValueTask<FrameHeader> ReceiveAsync(
-            IStreamReader stream, byte[] headerSpace)
+            IReadableByteStream stream, byte[] headerSpace)
         {
             await stream.ReadAll(new ArraySegment<byte>(headerSpace, 0, HeaderSize));
             return DecodeFrom(new ArraySegment<byte>(headerSpace, 0, HeaderSize));

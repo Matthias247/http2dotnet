@@ -725,7 +725,7 @@ namespace Http2
         /// </summary>
         public async ValueTask<Http2Error?> ProcessData(
             FrameHeader dataHeader,
-            IStreamReader inputStream,
+            IReadableByteStream inputStream,
             byte[] tempBuf)
         {
             // TODO: Actually we should read the data directly into the RingBuf

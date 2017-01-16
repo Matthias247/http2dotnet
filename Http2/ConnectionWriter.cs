@@ -80,7 +80,7 @@ namespace Http2
         /// <summary>The associated connection</summary>
         public Connection Connection { get; }
         /// <summary>The output stream this is utilizing</summary>
-        IStreamWriterCloser outStream;
+        IWriteAndCloseableByteStream outStream;
 
         /// <summary>HPack encoder</summary>
         Hpack.Encoder hEncoder;
@@ -121,7 +121,7 @@ namespace Http2
         /// Creates a new instance of the ConnectionWriter with the given options
         /// </summary>
         public ConnectionWriter(
-            Connection connection, IStreamWriterCloser outStream,
+            Connection connection, IWriteAndCloseableByteStream outStream,
             Options options, Hpack.Encoder.Options hpackOptions)
         {
             this.Connection = connection;

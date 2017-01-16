@@ -20,12 +20,12 @@ namespace Http2
             /// <summary>
             /// The stream which is used for receiving data
             /// </summary>
-            public IStreamReader InputStream;
+            public IReadableByteStream InputStream;
 
             /// <summary>
             /// The stream which is used for writing data
             /// </summary>
-            public IStreamWriterCloser OutputStream;
+            public IWriteAndCloseableByteStream OutputStream;
 
             /// <summary>
             /// Whether the connection represents the client or server part of
@@ -84,7 +84,7 @@ namespace Http2
         internal ILogger logger;
 
         internal ConnectionWriter Writer;
-        internal IStreamReader InputStream;
+        internal IReadableByteStream InputStream;
         TaskCompletionSource<object> connectionDoneTcs = new TaskCompletionSource<object>();
         internal HeaderReader HeaderReader;
         internal Settings LocalSettings;
@@ -95,6 +95,12 @@ namespace Http2
         /// a HTTP/2 connection. True for servers.
         /// </summary>
         public readonly bool IsServer;
+
+        /// <summary>
+        /// Returns a Task that will be completed once the Connection has been
+        /// fully closed.
+        /// </summary>
+        public Task Done => connectionDoneTcs.Task;
 
         /// <summary>
         /// Creates a new HTTP/2 connection on top of the a bidirectional stream
@@ -194,7 +200,8 @@ namespace Http2
                 // which is then followed by the remote SETTINGS
                 if (IsServer)
                 {
-                    await ClientPreface.ReadAsync(InputStream);
+                    // TODO: Make the timeout configureable
+                    await ClientPreface.ReadAsync(InputStream, 1000);
                 }
 
                 var continueRead = true;
@@ -727,7 +734,7 @@ namespace Http2
 
         private async ValueTask<Http2Error?> HandlePingFrame(FrameHeader fh)
         {
-            if (fh.StreamId == 0 || fh.Length != 8)
+            if (fh.StreamId != 0 || fh.Length != 8)
             {
                 var errc = ErrorCode.ProtocolError;
                 if (fh.Length != 8) errc = ErrorCode.FrameSizeError;
@@ -867,6 +874,17 @@ namespace Http2
 
                 // Set the settings received flag
                 settingsReceived = true;
+
+                // Send an acknowledge for the settings
+                var ackHeader = new FrameHeader
+                {
+                    Type = FrameType.Settings,
+                    Flags = (byte)SettingsFrameFlags.Ack,
+                    Length = 0,
+                    StreamId = 0u,
+                };
+                await Writer.WriteSettings(
+                    ackHeader, Constants.EmptyByteArray);
             }
 
             return null;

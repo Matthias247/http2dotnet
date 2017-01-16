@@ -13,10 +13,10 @@ namespace Http2
         /// </summary>
         public struct CreateStreamsResult
         {
-            /// <summary>The resulting reader</summary>
-            public IStreamReader Reader;
-            /// <summary>The resulting writer</summary>
-            public IStreamWriterCloser Writer;
+            /// <summary>The resulting readable stream</summary>
+            public IReadableByteStream ReadableStream;
+            /// <summary>The resulting writeable stream</summary>
+            public IWriteAndCloseableByteStream WriteableStream;
         }
 
         /// <summary>
@@ -31,12 +31,12 @@ namespace Http2
             var wrappedStream = new IoStreamWrapper(stream);
             return new CreateStreamsResult
             {
-                Reader = wrappedStream,
-                Writer = wrappedStream,
+                ReadableStream = wrappedStream,
+                WriteableStream = wrappedStream,
             };
         }
 
-        internal class IoStreamWrapper : IStreamReader, IStreamWriterCloser
+        internal class IoStreamWrapper : IReadableByteStream, IWriteAndCloseableByteStream
         {
             private System.IO.Stream stream;
 

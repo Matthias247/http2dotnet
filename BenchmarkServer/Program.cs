@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -15,7 +16,7 @@ class Program
 {
     static void Main(string[] args)
     {
-        var logProvider = new ConsoleLoggerProvider((s, level) => true, true);
+        var logProvider = NullLoggerProvider.Instance;
         // Create a TCP socket acceptor
         var listener = new TcpListener(IPAddress.Any, 8888);
         listener.Start();
@@ -34,32 +35,19 @@ class Program
     {
         try
         {
-            // Read the headers
+            // Consume headers
             var headers = await stream.ReadHeaders();
-            var method = headers.First(h => h.Name == ":method").Value;
-            var path = headers.First(h => h.Name == ":path").Value;
-            // Print the request method and path
-            Console.WriteLine("Method: {0}, Path: {1}", method, path);
 
-            // Read the request body and write it to console
-            var buf = new byte[2048];
-            while (true)
-            {
-                var readResult = await stream.ReadAsync(new ArraySegment<byte>(buf));
-                if (readResult.EndOfStream) break;
-                // Print the received bytes
-                Console.WriteLine(Encoding.ASCII.GetString(buf, 0, readResult.BytesRead));
-            }
+            // Read the request body to the end
+            await stream.DrainAsync();
 
             // Send a response which consists of headers and a payload
             var responseHeaders = new HeaderField[] {
                 new HeaderField { Name = ":status", Value = "200" },
-                new HeaderField { Name = "content-type", Value = "text/html" },
+                new HeaderField { Name = "nextone", Value = "i am a header value" },
             };
             await stream.WriteHeaders(responseHeaders, false);
-            await stream.WriteAsync(new ArraySegment<byte>(
-                Encoding.ASCII.GetBytes("Hello World!")), true);
-
+            await stream.WriteAsync(new ArraySegment<byte>(responseBody), true);
             // Request is fully handled here
         }
         catch (Exception e)
@@ -94,11 +82,43 @@ class Program
                 IsServer = true,
                 Settings = settings,
                 StreamListener = AcceptIncomingStream,
-                HuffmanStrategy = HuffmanStrategy.IfSmaller,
+                HuffmanStrategy = HuffmanStrategy.Never,
                 Logger = logProvider.CreateLogger("HTTP2Conn" + connectionId),
             });
 
             connectionId++;
+        }
+    }
+}
+
+public static class RequestUtils
+{
+    private static ArrayPool<byte> bufferPool = ArrayPool<byte>.Shared;
+
+    public async static Task DrainAsync(this IReadableByteStream stream)
+    {
+        var buf = bufferPool.Rent(2048);
+        var bytesRead = 0;
+
+        try
+        {
+            while (true)
+            {
+                var res = await stream.ReadAsync(new ArraySegment<byte>(buf));
+                if (res.BytesRead != 0)
+                {
+                    bytesRead += res.BytesRead;
+                }
+
+                if (res.EndOfStream)
+                {
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            bufferPool.Return(buf);
         }
     }
 }

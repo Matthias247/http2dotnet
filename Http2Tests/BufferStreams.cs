@@ -4,7 +4,7 @@ using Http2;
 
 namespace Http2Tests
 {
-    public class BufferReadStream : Http2.IStreamReader
+    public class BufferReadStream : Http2.IReadableByteStream
     {
         public byte[] Buffer;
         public int Written = 0;
@@ -18,7 +18,8 @@ namespace Http2Tests
             this.maxRead = maxRead;
         }
 
-        async ValueTask<StreamReadResult> IStreamReader.ReadAsync(ArraySegment<byte> buffer)
+        async ValueTask<StreamReadResult> IReadableByteStream.ReadAsync(
+            ArraySegment<byte> buffer)
         {
             return await Task.Run(() =>
             {
@@ -48,7 +49,7 @@ namespace Http2Tests
         }
     }
 
-    public class BufferWriteStream : Http2.IStreamWriter
+    public class BufferWriteStream : Http2.IWriteableByteStream
     {
         public byte[] Buffer;
         public int Written = 0;
@@ -58,7 +59,8 @@ namespace Http2Tests
             Buffer = new byte[bufferSize];
         }
 
-        async ValueTask<object> IStreamWriter.WriteAsync(ArraySegment<byte> buffer)
+        async ValueTask<object> IWriteableByteStream.WriteAsync(
+            ArraySegment<byte> buffer)
         {
             await Task.Run(() =>
             {

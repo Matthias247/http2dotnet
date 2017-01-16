@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Http2Tests
 {
-    public class StreamUtils
+    public class ByteStreamExtensionTests
     {
         public class ReadAll
         {

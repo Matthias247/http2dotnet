@@ -17,7 +17,7 @@ namespace Http2
         public bool EndOfStream;
     }
 
-    public interface IStreamReader
+    public interface IReadableByteStream
     {
         /// <summary>
         /// Reads data from a stream into the given buffer segment.
@@ -27,7 +27,7 @@ namespace Http2
         ValueTask<StreamReadResult> ReadAsync(ArraySegment<byte> buffer);
     }
 
-    public interface IStreamWriter
+    public interface IWriteableByteStream
     {
         /// <summary>
         /// Writes the buffer to the stream.
@@ -35,7 +35,7 @@ namespace Http2
         ValueTask<object> WriteAsync(ArraySegment<byte> buffer);
     }
 
-    public interface IStreamCloser
+    public interface ICloseableByteStream
     {
         /// <summary>
         /// Closes the stream gracefully.
@@ -45,7 +45,8 @@ namespace Http2
         ValueTask<object> CloseAsync();
     }
 
-    public interface IStreamWriterCloser : IStreamWriter, IStreamCloser
+    public interface IWriteAndCloseableByteStream
+        : IWriteableByteStream, ICloseableByteStream
     {
     }
 
