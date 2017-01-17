@@ -47,5 +47,19 @@ namespace Http2Tests
             };
             await stream.WriteFrameHeader(fh);
         }
+
+        public static async Task WritePing(
+            this IWriteAndCloseableByteStream stream, byte[] data, bool isAck)
+        {
+            var pingHeader = new FrameHeader
+            {
+                Type = FrameType.Ping,
+                Flags = isAck ? (byte)PingFrameFlags.Ack : (byte)0,
+                Length = 8,
+                StreamId = 0,
+            };
+            await stream.WriteFrameHeader(pingHeader);
+            await stream.WriteAsync(new ArraySegment<byte>(data, 0, 8));
+        }
     }
 }

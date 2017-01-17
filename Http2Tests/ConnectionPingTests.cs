@@ -22,15 +22,7 @@ namespace Http2Tests
 
             var pingData = new byte[8];
             for (var i = 0; i < pingData.Length; i++) pingData[i] = (byte)i;
-            var pingHeader = new FrameHeader
-            {
-                Type = FrameType.Ping,
-                Flags = 0,
-                Length = 8,
-                StreamId = 0,
-            };
-            await inPipe.WriteFrameHeader(pingHeader);
-            await inPipe.WriteAsync(new ArraySegment<byte>(pingData));
+            await inPipe.WritePing(pingData, false);
             var res = await outPipe.ReadFrameHeaderWithTimeout();
             Assert.Equal(FrameType.Ping, res.Type);
             Assert.Equal(0u, res.StreamId);
@@ -93,18 +85,11 @@ namespace Http2Tests
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
                 true, inPipe, outPipe);
 
+            // Write ping ACK
             var pingData = new byte[8];
             for (var i = 0; i < pingData.Length; i++) pingData[i] = (byte)i;
-            var pingHeader = new FrameHeader
-            {
-                Type = FrameType.Ping,
-                Flags = (byte)PingFrameFlags.Ack,
-                Length = 8,
-                StreamId = 0,
-            };
-            // Write ping ACK
-            await inPipe.WriteFrameHeader(pingHeader);
-            await inPipe.WriteAsync(new ArraySegment<byte>(pingData));
+            await inPipe.WritePing(pingData, true);
+
             // Expect no reaction
             await outPipe.AssertReadTimeout();
         }
