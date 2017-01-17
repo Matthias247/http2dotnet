@@ -80,14 +80,16 @@ namespace Http2
         /// 0 means we never sent anything
         uint lastOutgoingStreamId = 0;
 
-        private Func<IStream, bool> StreamListener;
-        internal ILogger logger;
+        private readonly Func<IStream, bool> StreamListener;
+        internal readonly ILogger logger;
 
-        internal ConnectionWriter Writer;
-        internal IReadableByteStream InputStream;
-        TaskCompletionSource<object> connectionDoneTcs = new TaskCompletionSource<object>();
-        internal HeaderReader HeaderReader;
-        internal Settings LocalSettings;
+        internal readonly ConnectionWriter Writer;
+        internal readonly IReadableByteStream InputStream;
+        private readonly TaskCompletionSource<object> connectionDoneTcs =
+            new TaskCompletionSource<object>();
+
+        private readonly HeaderReader HeaderReader;
+        internal readonly Settings LocalSettings;
         internal Settings RemoteSettings = Settings.Default;
 
         /// <summary>

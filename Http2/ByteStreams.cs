@@ -3,6 +3,9 @@ using System.Threading.Tasks;
 
 namespace Http2
 {
+    /// <summary>
+    /// The result of a ReadAsync operation
+    /// </summary>
     public struct StreamReadResult
     {
         /// <summary>
@@ -39,7 +42,7 @@ namespace Http2
     {
         /// <summary>
         /// Closes the stream gracefully.
-        /// This signals and EndOfStream to the receiving side once all prior
+        /// This should signal EndOfStream to the receiving side once all prior
         /// data has been read.
         /// </summary>
         ValueTask<object> CloseAsync();
