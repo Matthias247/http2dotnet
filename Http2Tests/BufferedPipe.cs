@@ -7,9 +7,20 @@ using Xunit;
 
 namespace Http2Tests
 {
+    /// <summary>
+    /// A pipe, which connects two tasks.
+    /// On task uses the reading side an can read data from the pipe,
+    /// the other task uses the writing side and can write data or close the pipe
+    /// </summary>
+    public interface IBufferedPipe
+        : IReadableByteStream, IWriteAndCloseableByteStream
+    {
+    }
+
     public class BufferedPipe
         : IWriteableByteStream, IReadableByteStream,
-          ICloseableByteStream, IWriteAndCloseableByteStream
+          ICloseableByteStream, IWriteAndCloseableByteStream,
+          IBufferedPipe
     {
         public byte[] Buffer;
         public int Written = 0;

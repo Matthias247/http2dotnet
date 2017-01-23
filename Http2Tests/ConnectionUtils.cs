@@ -12,12 +12,12 @@ namespace Http2Tests
     {
         public static async Task<Connection> BuildEstablishedConnection(
             bool isServer,
-            IWriteAndCloseableByteStream inputStream,
-            IWriteAndCloseableByteStream outputStream)
+            IBufferedPipe inputStream,
+            IBufferedPipe outputStream)
         {
             var conn = new Connection(new Connection.Options
             {
-                InputStream = inputStream as IReadableByteStream,
+                InputStream = inputStream,
                 OutputStream = outputStream,
                 IsServer = isServer,
                 Settings = Settings.Default,
@@ -28,14 +28,13 @@ namespace Http2Tests
                 await ClientPreface.WriteAsync(inputStream);
             }
             await inputStream.WriteDefaultSettings();
-            var oStream = outputStream as IReadableByteStream;
 
             if (!isServer)
             {
-                await oStream.ReadAndDiscardPreface();
+                await outputStream.ReadAndDiscardPreface();
             }
-            await oStream.ReadAndDiscardSettings();
-            await oStream.AssertSettingsAck();
+            await outputStream.ReadAndDiscardSettings();
+            await outputStream.AssertSettingsAck();
             await inputStream.WriteSettingsAck();
             return conn;
         }

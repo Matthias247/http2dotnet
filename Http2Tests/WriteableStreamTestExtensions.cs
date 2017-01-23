@@ -61,5 +61,25 @@ namespace Http2Tests
             await stream.WriteFrameHeader(pingHeader);
             await stream.WriteAsync(new ArraySegment<byte>(data, 0, 8));
         }
+
+        public static async Task WriteWindowUpdate(
+            this IWriteAndCloseableByteStream stream, uint streamId, int amount)
+        {
+            var pingHeader = new FrameHeader
+            {
+                Type = FrameType.Ping,
+                Flags = 0,
+                Length = WindowUpdateData.Size,
+                StreamId = streamId,
+            };
+            var data = new WindowUpdateData
+            {
+                WindowSizeIncrement = amount,
+            };
+            var dataBytes = new byte[WindowUpdateData.Size];
+            data.EncodeInto(new ArraySegment<byte>(dataBytes));
+            await stream.WriteFrameHeader(pingHeader);
+            await stream.WriteAsync(new ArraySegment<byte>(dataBytes));
+        }
     }
 }
