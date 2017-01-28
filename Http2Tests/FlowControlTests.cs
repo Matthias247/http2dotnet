@@ -232,6 +232,72 @@ namespace Http2Tests
         }
 
         [Fact]
+        public async Task BlockedWritesShouldUnblockOnExternalStreamReset()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            // Create a stream. It will have a flow control window of 64kb
+            // for stream and connection
+            var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe);
+            // Initiate response by sending and consuming headers
+            await res.stream.WriteHeaders(ServerStreamTests.DefaultStatusHeaders, false);
+            await outPipe.ReadAndDiscardHeaders(1u, false);
+            // Start discarding all ougoing data -> Not needed for this test
+            // and pipe may not be blocked
+            var readTask = Task.Run(async () =>
+            {
+                await outPipe.ReadAllToArrayWithTimeout();
+            });
+            // Write flow control window amount of data
+            await res.stream.WriteWithTimeout(new ArraySegment<byte>(new byte[65535]));
+            var resetTask = Task.Run(async () =>
+            {
+                await Task.Delay(20);
+                await inPipe.WriteResetStream(1u, ErrorCode.Cancel);
+            });
+            // Write additional bytes. This should block and cause a streamreset
+            // exception when the cancel arrives
+            await Assert.ThrowsAsync<StreamResetException>(async () =>
+            {
+                await res.stream.WriteAsync(new ArraySegment<byte>(new byte[1024]));
+            });
+        }
+
+        [Fact]
+        public async Task BlockedWritesShouldUnblockOnStreamCancel()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            // Create a stream. It will have a flow control window of 64kb
+            // for stream and connection
+            var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe);
+            // Initiate response by sending and consuming headers
+            await res.stream.WriteHeaders(ServerStreamTests.DefaultStatusHeaders, false);
+            await outPipe.ReadAndDiscardHeaders(1u, false);
+            // Start discarding all ougoing data -> Not needed for this test
+            // and pipe may not be blocked
+            var readTask = Task.Run(async () =>
+            {
+                await outPipe.ReadAllToArrayWithTimeout();
+            });
+            // Write flow control window amount of data
+            await res.stream.WriteWithTimeout(new ArraySegment<byte>(new byte[65535]));
+            var resetTask = Task.Run(async () =>
+            {
+                await Task.Delay(20);
+                res.stream.Cancel();
+            });
+            // Write additional bytes. This should block and cause a streamreset
+            // exception when the cancel arrives
+            await Assert.ThrowsAsync<StreamResetException>(async () =>
+            {
+                await res.stream.WriteAsync(new ArraySegment<byte>(new byte[1024]));
+            });
+        }
+
+        [Fact]
         public async Task ShouldAllowToSetTheMaxPossibleConnectionFlowControlWindowSize()
         {
             var inPipe = new BufferedPipe(1024);

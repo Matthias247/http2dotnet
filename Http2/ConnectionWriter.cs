@@ -320,9 +320,11 @@ namespace Http2
                         Connection.logger.IsEnabled(LogLevel.Trace))
                     {
                         Connection.logger.LogTrace(
-                            "Sending {0} bytes of data for stream {1}. " +
-                            "New flow control windows for stream/connection: {2}/{3}",
-                            toSend, s.StreamId, s.Window, connFlowWindow);
+                            "Outgoing flow control window update:\n" +
+                            "  Connection window: {0} -> {1}\n" +
+                            "  Stream {2} window: {2} -> {3}",
+                            connFlowWindow + toSend, connFlowWindow,
+                            s.StreamId, s.Window + toSend, s.Window);
                     }
 
                     if (canSend < first.Data.Count)
@@ -1068,7 +1070,8 @@ namespace Http2
                         Connection.logger.IsEnabled(LogLevel.Trace))
                     {
                         Connection.logger.LogTrace(
-                            "Updating flow control window of connection from {0} to {1}",
+                            "Outgoing flow control window update:\n" +
+                            "  Connection window: {0} -> {1}",
                             connFlowWindow, connFlowWindow + amount);
                     }
                     if (connFlowWindow == 0) wakeup = true;
@@ -1097,7 +1100,8 @@ namespace Http2
                                 Connection.logger.IsEnabled(LogLevel.Trace))
                             {
                                 Connection.logger.LogTrace(
-                                    "Updating flow control window of stream {0} from {1} to {2}",
+                                    "Outgoing flow control window update:\n" +
+                                    "  Stream {0} window: {1} -> {2}",
                                     streamId, s.Window, s.Window + amount);
                             }
                             if (s.Window == 0 && s.WriteQueue.Count > 0) wakeup = true;
