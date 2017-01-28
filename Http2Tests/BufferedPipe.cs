@@ -27,7 +27,7 @@ namespace Http2Tests
         public bool IsClosed = false;
         AsyncManualResetEvent canRead = new AsyncManualResetEvent(false);
         AsyncManualResetEvent canWrite = new AsyncManualResetEvent(true);
-        SemaphoreSlim mr = new SemaphoreSlim(1);
+        object mutex = new object();
         SemaphoreSlim writeLock = new SemaphoreSlim(1);
 
         public BufferedPipe(int bufferSize)
@@ -40,46 +40,48 @@ namespace Http2Tests
         {
             // Wait until read is possible
             await canRead;
-            await mr.WaitAsync();
 
-            var available = Written;
-            if (available == 0)
+            var wakeupWriter = false;
+            var toCopy = 0;
+
+            lock (mutex)
             {
-                mr.Release();
-                return new StreamReadResult
+                var available = Written;
+                if (available == 0)
                 {
-                    BytesRead = 0,
-                    EndOfStream = true,
-                };
-            }
-
-            var toCopy = Math.Min(available, buffer.Count);
-            Array.Copy(Buffer, 0, buffer.Array, buffer.Offset, toCopy);
-
-            if (toCopy == Written)
-            {
-                // Everything was consumed
-                Written = 0;
-                if (!IsClosed)
-                {
-                    // Block the read only if the pipe is not closed
-                    // If closed the reading part must be able to read
-                    // the EndOfStream info in the next iteration.
-                    canRead.Reset();
+                    return new StreamReadResult
+                    {
+                        BytesRead = 0,
+                        EndOfStream = true,
+                    };
                 }
-            }
-            else
-            {
-                // Move unconsumed data to start of array
-                var remaining = Written - toCopy;
-                Array.Copy(Buffer, toCopy, Buffer, 0, remaining);
-                Written -= toCopy;
-            }
 
-            // Determine whether to wakeup the writer
-            var wakeupWriter = Written != Buffer.Length;
+                toCopy = Math.Min(available, buffer.Count);
+                Array.Copy(Buffer, 0, buffer.Array, buffer.Offset, toCopy);
 
-            mr.Release();
+                if (toCopy == Written)
+                {
+                    // Everything was consumed
+                    Written = 0;
+                    if (!IsClosed)
+                    {
+                        // Block the read only if the pipe is not closed
+                        // If closed the reading part must be able to read
+                        // the EndOfStream info in the next iteration.
+                        canRead.Reset();
+                    }
+                }
+                else
+                {
+                    // Move unconsumed data to start of array
+                    var remaining = Written - toCopy;
+                    Array.Copy(Buffer, toCopy, Buffer, 0, remaining);
+                    Written -= toCopy;
+                }
+
+                // Determine whether to wakeup the writer
+                wakeupWriter = Written != Buffer.Length;
+            }
 
             // Wakeup the writer if he is waiting and there is free space
             if (wakeupWriter)
@@ -124,43 +126,44 @@ namespace Http2Tests
         private async ValueTask<int> WriteOnce(ArraySegment<byte> buffer)
         {
             await canWrite;
-            await mr.WaitAsync();
-            if (IsClosed)
+            var writeAmount = 0;
+            lock (mutex)
             {
-                mr.Release();
-                throw new Exception("Write on closed stream");
+                if (IsClosed)
+                {
+                    throw new Exception("Write on closed stream");
+                }
+                var free = Buffer.Length - Written;
+                writeAmount = Math.Min(free, buffer.Count);
+                Array.Copy(buffer.Array, buffer.Offset, Buffer, Written, writeAmount);
+                Written += writeAmount;
+
+                if (Written == Buffer.Length)
+                {
+                    // Buffer is full. Need to wait for reader next time
+                    canWrite.Reset();
+                }
             }
-            var free = Buffer.Length - Written;
-            var toCopy = Math.Min(free, buffer.Count);
-            Array.Copy(buffer.Array, buffer.Offset, Buffer, Written, toCopy);
-            Written += toCopy;
 
-            if (Written == Buffer.Length)
-            {
-                // Buffer is full. Need to wait for reader next time
-                canWrite.Reset();
-            }
-
-            mr.Release();
-
-            if (toCopy > 0)
+            if (writeAmount > 0)
             {
                 // Allow the reader to proceed
                 canRead.Set();
             }
 
-            return toCopy;
+            return writeAmount;
         }
 
-        public async ValueTask<object> CloseAsync()
+        public ValueTask<object> CloseAsync()
         {
-            await mr.WaitAsync();
-            IsClosed = true;
-            mr.Release();
+            lock (mutex)
+            {
+                IsClosed = true;
+            }
 
             canRead.Set();
             canWrite.Set();
-            return null;
+            return new ValueTask<object>(true);
         }
     }
 

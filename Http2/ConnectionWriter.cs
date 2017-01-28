@@ -146,6 +146,11 @@ namespace Http2
                 if (!Connection.IsServer)
                 {
                     await ClientPreface.WriteAsync(outStream);
+                    if (Connection.logger != null &&
+                        Connection.logger.IsEnabled(LogLevel.Trace))
+                    {
+                        Connection.logger.LogTrace("send ClientPreface");
+                    }
                 }
 
                 bool continueRun = true;
@@ -290,7 +295,6 @@ namespace Http2
             for (var i = 0; i < Streams.Count; i++)
             {
                 var s = Streams[i];
-                i++;
                 if (s.WriteQueue.Count == 0) continue;
                 var first = s.WriteQueue.Peek();
                 // If it's not a data frame we can always write it
@@ -298,13 +302,37 @@ namespace Http2
                 if (first.Header.Type == FrameType.Data)
                 {
                     // Check how much flow we have
-                    var availableFlow = Math.Min(this.connFlowWindow, s.Window);
-                    if (availableFlow == 0) continue; // Not flow
-                    if (availableFlow < first.Data.Count)
+                    var canSend = Math.Min(this.connFlowWindow, s.Window);
+                    // And also respect the maximum frame size
+                    // As we don't use padding we can use the full frame
+                    canSend = Math.Min(canSend, options.MaxFrameSize);
+                    // If flow control window is empty check the next stream
+                    // However empty data frames can be sent without a window
+                    if (canSend == 0 && first.Data.Count != 0) continue;
+
+                    // Adjust the flow control windows by what we are able to write
+                    var toSend = Math.Min(canSend, first.Data.Count);
+                    connFlowWindow -= toSend;
+                    s.Window -= toSend;
+                    Streams[i] = s;
+
+                    if (Connection.logger != null &&
+                        Connection.logger.IsEnabled(LogLevel.Trace))
+                    {
+                        Connection.logger.LogTrace(
+                            "Sending {0} bytes of data for stream {1}. " +
+                            "New flow control windows for stream/connection: {2}/{3}",
+                            toSend, s.StreamId, s.Window, connFlowWindow);
+                    }
+
+                    if (canSend < first.Data.Count)
                     {
                         // We can write a part of the request
                         // In order to write the complete request we have to segment it
-                        s.WriteQueue.Dequeue();
+                        // The DATA frame will stay queued, but we will create an
+                        // additional WriteRequest which handles writing the first
+                        // part of it. The queued WriteRequest gets modified to
+                        // handle the remaining part
                         var we = AllocateWriteRequest();
                         we.Header = first.Header;
                         // Reset a potential EndOfStream flag
@@ -312,11 +340,11 @@ namespace Http2
                         // the stream. This isn't it.
                         we.Header.Flags = 0;
                         we.Data = new ArraySegment<byte>(
-                            first.Data.Array, first.Data.Offset, availableFlow);
+                            first.Data.Array, first.Data.Offset, canSend);
                         // Adjust the amount of bytes that have to be written later on
                         var oldData = first.Data;
                         first.Data = new ArraySegment<byte>(
-                            oldData.Array, oldData.Offset + availableFlow, oldData.Count - availableFlow);
+                            oldData.Array, oldData.Offset + canSend, oldData.Count - canSend);
                         return we;
                     }
                 }
@@ -328,7 +356,7 @@ namespace Http2
                 // Window update frames are send through the generic queue
                 if (first.Header.Type == FrameType.ResetStream || first.Header.HasEndOfStreamFlag)
                 {
-                    Streams.RemoveAt(i-1);
+                    Streams.RemoveAt(i);
                     // Make sure that the queue inside this stream
                     // does not contain anything after the written element.
                     // This would be a contract violation and StreamImpl should be checked.
@@ -1024,7 +1052,6 @@ namespace Http2
             {
                 if (streamId == 0)
                 {
-                    if (connFlowWindow == 0) wakeup = true;
                     // Check for overflow
                     var maxIncrease = int.MaxValue - connFlowWindow;
                     if (amount > maxIncrease)
@@ -1037,6 +1064,14 @@ namespace Http2
                         };
                     }
                     // Increase connection flow control value
+                    if (Connection.logger != null &&
+                        Connection.logger.IsEnabled(LogLevel.Trace))
+                    {
+                        Connection.logger.LogTrace(
+                            "Updating flow control window of connection from {0} to {1}",
+                            connFlowWindow, connFlowWindow + amount);
+                    }
+                    if (connFlowWindow == 0) wakeup = true;
                     connFlowWindow += amount;
                 }
                 else
@@ -1046,7 +1081,6 @@ namespace Http2
                         if (Streams[i].StreamId == streamId)
                         {
                             var s = Streams[i];
-                            if (s.Window == 0 && s.WriteQueue.Count > 0) wakeup = true;
                             // Check for overflow
                             var maxIncrease = int.MaxValue - s.Window;
                             if (amount > maxIncrease)
@@ -1059,6 +1093,14 @@ namespace Http2
                                 };
                             }
                             // Increase stream flow control value
+                            if (Connection.logger != null &&
+                                Connection.logger.IsEnabled(LogLevel.Trace))
+                            {
+                                Connection.logger.LogTrace(
+                                    "Updating flow control window of stream {0} from {1} to {2}",
+                                    streamId, s.Window, s.Window + amount);
+                            }
+                            if (s.Window == 0 && s.WriteQueue.Count > 0) wakeup = true;
                             s.Window += amount;
                             Streams[i] = s;
                             break;

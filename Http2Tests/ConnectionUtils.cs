@@ -1,8 +1,6 @@
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
-
-using Xunit;
+using Microsoft.Extensions.Logging;
 
 using Http2;
 
@@ -13,30 +11,53 @@ namespace Http2Tests
         public static async Task<Connection> BuildEstablishedConnection(
             bool isServer,
             IBufferedPipe inputStream,
-            IBufferedPipe outputStream)
+            IBufferedPipe outputStream,
+            ILoggerProvider loggerProvider,
+            Func<IStream, bool> streamListener = null)
         {
+            ILogger logger = null;
+            if (loggerProvider != null)
+            {
+                logger = loggerProvider.CreateLogger("http2Con");
+            }
+            if (streamListener == null)
+            {
+                streamListener = (s) => false;
+            }
+
             var conn = new Connection(new Connection.Options
             {
                 InputStream = inputStream,
                 OutputStream = outputStream,
                 IsServer = isServer,
                 Settings = Settings.Default,
-                StreamListener = (s) => false,
+                Logger = logger,
+                StreamListener = streamListener,
+                HuffmanStrategy = Http2.Hpack.HuffmanStrategy.Never,
             });
-            if (isServer)
+            await PerformHandshakes(conn, inputStream, outputStream);
+
+            return conn;
+        }
+
+        public static async Task PerformHandshakes(
+            this Connection connection,
+            IBufferedPipe inputStream,
+            IBufferedPipe outputStream)
+        {
+            if (connection.IsServer)
             {
                 await ClientPreface.WriteAsync(inputStream);
             }
-            await inputStream.WriteDefaultSettings();
+            await inputStream.WriteSettings(Settings.Default);
 
-            if (!isServer)
+            if (!connection.IsServer)
             {
                 await outputStream.ReadAndDiscardPreface();
             }
             await outputStream.ReadAndDiscardSettings();
             await outputStream.AssertSettingsAck();
             await inputStream.WriteSettingsAck();
-            return conn;
         }
     }
 }

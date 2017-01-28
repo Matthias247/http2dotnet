@@ -1,8 +1,9 @@
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 using Xunit;
+using Xunit.Abstractions;
 
 using Http2;
 
@@ -10,6 +11,13 @@ namespace Http2Tests
 {
     public class ConnectionPingTests
     {
+        private readonly ILoggerProvider loggerProvider;
+
+        public ConnectionPingTests(ITestOutputHelper outputHelper)
+        {
+            this.loggerProvider = new XUnitOutputLoggerProvider(outputHelper);
+        }
+
         [Theory]
         [InlineData(true)]
         [InlineData(false)]
@@ -18,7 +26,7 @@ namespace Http2Tests
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
-                isServer, inPipe, outPipe);
+                isServer, inPipe, outPipe, loggerProvider);
 
             var pingData = new byte[8];
             for (var i = 0; i < pingData.Length; i++) pingData[i] = (byte)i;
@@ -39,7 +47,7 @@ namespace Http2Tests
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
-                true, inPipe, outPipe);
+                true, inPipe, outPipe, loggerProvider);
 
             var pingHeader = new FrameHeader
             {
@@ -63,7 +71,7 @@ namespace Http2Tests
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
-                true, inPipe, outPipe);
+                true, inPipe, outPipe, loggerProvider);
 
             var pingHeader = new FrameHeader
             {
@@ -83,7 +91,7 @@ namespace Http2Tests
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
-                true, inPipe, outPipe);
+                true, inPipe, outPipe, loggerProvider);
 
             // Write ping ACK
             var pingData = new byte[8];

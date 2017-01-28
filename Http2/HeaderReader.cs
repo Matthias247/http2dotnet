@@ -90,6 +90,25 @@ namespace Http2
             var f = (HeadersFrameFlags)firstHeader.Flags;
             var isEndOfStream = f.HasFlag(HeadersFrameFlags.EndOfStream);
             var isEndOfHeaders = f.HasFlag(HeadersFrameFlags.EndOfHeaders);
+            var isPadded = f.HasFlag(HeadersFrameFlags.Padded);
+            var hasPriority = f.HasFlag(HeadersFrameFlags.Priority);
+
+            // Do a first check whether frame is big enough for the given flags
+            var minLength = 0;
+            if (isPadded) minLength += 1;
+            if (hasPriority) minLength += 5;
+            if (firstHeader.Length < minLength)
+            {
+                return new Result
+                {
+                    Error = new Http2Error
+                    {
+                        StreamId = 0,
+                        Code = ErrorCode.ProtocolError,
+                        Message = "Invalid frame content size",
+                    },
+                };
+            }
 
             // Read the content of the initial frame
             await reader.ReadAll(new ArraySegment<byte>(buffer, 0, firstHeader.Length));
@@ -97,14 +116,14 @@ namespace Http2
             var offset = 0;
             var padLen = 0;
 
-            if (f.HasFlag(HeadersFrameFlags.Padded))
+            if (isPadded)
             {
                 // Extract padding Length
                 padLen = buffer[0];
                 offset++;
             }
 
-            if (f.HasFlag(HeadersFrameFlags.Priority))
+            if (hasPriority)
             {
                 // Extract priority
                 prioData = PriorityData.DecodeFrom(

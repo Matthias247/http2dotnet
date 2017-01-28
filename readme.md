@@ -221,8 +221,9 @@ The library currently faces the following limitations:
   upgrade from HTTP/1.1. This currently doesn't allow the h2c upgrade mechanism.
 - Missing support for reading the remote SETTINGS from application side.
 - The scheduling of outgoing DATA frames is very basic and relies mostly on flow
-  control windows. It is currently not guaranteed that concurrent streams with
-  equal flow control windows will get the same amount of bandwith. HTTP/2
-  priorization features are also not supported - however these are optional
+  control windows and the maximum supported frame size. It is currently not
+  guaranteed that concurrent streams with equal flow control windows will get
+  the same amount of bandwith.
+  HTTP/2 priorization features are also not supported - however these are optional
   according to the HTTP/2 specification and may not be required for lots of
   applications.

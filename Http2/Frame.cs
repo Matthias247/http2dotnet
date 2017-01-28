@@ -273,12 +273,6 @@ namespace Http2
         /// any padding that it describes are present.
         /// </summary>
         Padded = 0x08,
-
-        /// <summary>
-        /// When set, bit 5 indicates that the Exclusive Flag (E),
-        /// Stream Dependency, and Weight fields are present
-        /// </summary>
-        Priority = 0x20,
     }
 
     /// <summary>
@@ -393,7 +387,7 @@ namespace Http2
         public const int Size = 4;
 
         /// <summary>
-        /// Encodes the window update data into the given byte array
+        /// Encodes the reset stream data into the given byte array
         /// This must be at least 4 bytes long
         /// </summary>
         public void EncodeInto(ArraySegment<byte> bytes)
@@ -409,7 +403,7 @@ namespace Http2
         }
 
         /// <summary>
-        /// Encodes the window update data into the given byte array
+        /// Encodes the reset stream data into the given byte array
         /// This must be at least 4 bytes long
         /// </summary>
         public static ResetFrameData DecodeFrom(ArraySegment<byte> bytes)

@@ -1,7 +1,10 @@
 using System;
+using System.Reflection;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 using Xunit;
+using Xunit.Abstractions;
 
 using Http2;
 
@@ -9,19 +12,41 @@ namespace Http2Tests
 {
     public class ConnectionPrefaceTests
     {
-        Connection BuildConnection(
+        private static Connection BuildConnection(
             bool isServer,
             IReadableByteStream inputStream,
-            IWriteAndCloseableByteStream outputStream)
+            IWriteAndCloseableByteStream outputStream,
+            ILoggerProvider loggerProvider)
         {
+            ILogger logger = null;
+            if (loggerProvider != null)
+            {
+                logger = loggerProvider.CreateLogger("http2Con");
+            }
+
             return new Connection(new Connection.Options
             {
                 InputStream = inputStream,
                 OutputStream = outputStream,
                 IsServer = isServer,
                 Settings = Settings.Default,
+                Logger = logger,
                 StreamListener = (s) => false,
             });
+        }
+
+        private readonly ILoggerProvider loggerProvider;
+
+        public ConnectionPrefaceTests(ITestOutputHelper outputHelper)
+        {
+            this.loggerProvider = new XUnitOutputLoggerProvider(outputHelper);
+            // Decrease the timeout for the preface,
+            // as this speeds the test up
+            var timeoutProp =
+                typeof(Connection).GetField(
+                    "ClientPrefaceTimeout",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+            timeoutProp.SetValue(null, 200);
         }
 
         [Fact]
@@ -29,7 +54,8 @@ namespace Http2Tests
         {
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
-            var http2Con = BuildConnection(false, inPipe, outPipe);
+            var logger = loggerProvider.CreateLogger("http2Con");
+            var http2Con = BuildConnection(false, inPipe, outPipe, loggerProvider);
 
             var b = new byte[ClientPreface.Length];
             await outPipe.ReadAllWithTimeout(new ArraySegment<byte>(b));
@@ -41,7 +67,8 @@ namespace Http2Tests
         {
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
-            var http2Con = BuildConnection(true, inPipe, outPipe);
+            var logger = loggerProvider.CreateLogger("http2Con");
+            var http2Con = BuildConnection(true, inPipe, outPipe, loggerProvider);
 
             var b = new byte[ClientPreface.Length];
             // Initialize with non-preface data
@@ -73,7 +100,8 @@ namespace Http2Tests
         {
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
-            var http2Con = BuildConnection(true, inPipe, outPipe);
+            var logger = loggerProvider.CreateLogger("http2Con");
+            var http2Con = BuildConnection(true, inPipe, outPipe, loggerProvider);
 
             // Write some dummy data
             // All this data is not long enough to be a preface, so the
@@ -95,7 +123,7 @@ namespace Http2Tests
 
             var buf = new byte[1];
             var readTask = outPipe.ReadAsync(new ArraySegment<byte>(buf)).AsTask();
-            var timeoutTask = Task.Delay(2000);
+            var timeoutTask = Task.Delay(1000);
             var combined = Task.WhenAny(new Task[]{ readTask, timeoutTask });
             var doneTask = await combined;
             if (ReferenceEquals(doneTask, readTask))
@@ -106,7 +134,9 @@ namespace Http2Tests
                 // Received end of stream
                 return;
             }
-            throw new TimeoutException();
+            Assert.True(false,
+                "Expected connection to close outgoing stream. " +
+                "Got timeout");
         }
     }
 }

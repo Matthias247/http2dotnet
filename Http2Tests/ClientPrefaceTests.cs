@@ -18,6 +18,17 @@ namespace Http2Tests
         }
 
         [Fact]
+        public void PrefixShouldBeCorrectASCIIEncoded()
+        {
+            Assert.Equal(
+                new byte[] {
+                    0x50, 0x52, 0x49, 0x20, 0x2a, 0x20, 0x48, 0x54, 0x54, 0x50,
+                    0x2f, 0x32, 0x2e, 0x30, 0x0d, 0x0a, 0x0d, 0x0a, 0x53, 0x4d,
+                    0x0d, 0x0a, 0x0d, 0x0a },
+                ClientPreface.Bytes);
+        }
+
+        [Fact]
         public async Task ShouldWriteThePrefaceToStream()
         {
             var buffer = new BufferWriteStream(50);
@@ -52,7 +63,7 @@ namespace Http2Tests
         {
             var buffer = new BufferReadStream(50, 50);
             Array.Copy(ClientPreface.Bytes, buffer.Buffer, ClientPreface.Length);
-            ClientPreface.Bytes[22] = (byte)'l';
+            buffer.Buffer[22] = (byte)'l';
             buffer.Written = ClientPreface.Length;
             var ex = await Assert.ThrowsAsync<Exception>(
                 () => ClientPreface.ReadAsync(buffer).AsTask());

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 using Http2.Hpack;
 using Http2.Internal;
@@ -122,6 +123,9 @@ namespace Http2
                     {
                         // TODO: Allow for multiple header packets or not?
                         // It seems it is required for informational headers to work
+                        // However we might check later on if a status code different
+                        // from 100 was already sent and if yes don't allow further
+                        // headers to be sent.
                     }
 
                     headersSent = true;
@@ -129,18 +133,9 @@ namespace Http2
                     {
                         case StreamState.Idle:
                             state = StreamState.Open;
-                            if (endOfStream)
-                            {
-                                state = StreamState.HalfClosedLocal;
-                            }
                             break;
                         case StreamState.ReservedLocal:
                             state = StreamState.HalfClosedRemote;
-                            if (endOfStream)
-                            {
-                                state = StreamState.Closed;
-                                removeStream = true;
-                            }
                             break;
                         case StreamState.Reset:
                             throw new StreamResetException();
@@ -149,9 +144,19 @@ namespace Http2
                         // At least in order for a stream to be closed headers
                         // need to be sent. With push promises it might be different
                     }
+
+                    if (state == StreamState.Open && endOfStream)
+                    {
+                        state = StreamState.HalfClosedLocal;
+                    }
+                    else if (state == StreamState.HalfClosedRemote && endOfStream)
+                    {
+                        state = StreamState.Closed;
+                        removeStream = true;
+                    }
                 }
 
-                await SendHeaders(headers, endOfStream);
+                await SendHeaders(headers, endOfStream); // TODO: Use result
             }
             finally
             {
@@ -210,7 +215,7 @@ namespace Http2
                     }
                 }
 
-                await SendHeaders(headers, true);
+                await SendHeaders(headers, true); // TODO: Use result
             }
             finally
             {
@@ -260,6 +265,13 @@ namespace Http2
                     recvBuf.Dispose();
                     recvBuf = null;
                 }
+            }
+
+            if (connection.logger != null)
+            {
+                connection.logger.LogTrace(
+                    "Resetted stream {0} with error code {1}",
+                    Id, errorCode);
             }
 
             // Remark: Even if we are here in IDLE state we need to send the
@@ -742,17 +754,7 @@ namespace Http2
             var flags = (DataFrameFlags)dataHeader.Flags;
             if (flags.HasFlag(DataFrameFlags.Padded))
             {
-                // Must have at least 1 byte
-                if (length < 1)
-                {
-                    return new Http2Error
-                    {
-                        StreamId = 0, // This is a connection error
-                        Code = ErrorCode.ProtocolError,
-                        Message = "Frame is too small to contain padding",
-                    };
-                }
-                var padLen = tempBuf[0];
+                var padLen = tempBuf[0]; // Access is safe. Length 1 is checked before
                 offset++;
                 length--;
                 length -= padLen;

@@ -1,8 +1,9 @@
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 using Xunit;
+using Xunit.Abstractions;
 
 using Http2;
 
@@ -10,18 +11,25 @@ namespace Http2Tests
 {
     public class ConnectionUnknownFrameTests
     {
+        private readonly ILoggerProvider loggerProvider;
+
+        public ConnectionUnknownFrameTests(ITestOutputHelper outputHelper)
+        {
+            this.loggerProvider = new XUnitOutputLoggerProvider(outputHelper);
+        }
+
         [Theory]
         [InlineData(true, 0)]
         [InlineData(true, 512)]
         [InlineData(false, 0)]
         [InlineData(false, 512)]
-        public async Task ConnectionShouldIgnoreUnknownFramesWithPong(
+        public async Task ConnectionShouldIgnoreUnknownFrames(
             bool isServer, int payloadLength)
         {
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
-                isServer, inPipe, outPipe);
+                isServer, inPipe, outPipe, loggerProvider);
 
             // send an undefined frame type
             var fh = new FrameHeader
@@ -43,13 +51,7 @@ namespace Http2Tests
             var pingData = new byte[8];
             for (var i = 0; i < 8; i++) pingData[i] = (byte)i;
             await inPipe.WritePing(pingData, false);
-            var res = await outPipe.ReadFrameHeaderWithTimeout();
-            Assert.Equal(FrameType.Ping, res.Type);
-            Assert.Equal(0u, res.StreamId);
-            Assert.Equal(8, res.Length);
-            Assert.Equal((byte)PingFrameFlags.Ack, res.Flags);
-            var pongData = new byte[8];
-            await outPipe.ReadAllWithTimeout(new ArraySegment<byte>(pongData));
+            await outPipe.ReadAndDiscardPong();
         }
     }
 }

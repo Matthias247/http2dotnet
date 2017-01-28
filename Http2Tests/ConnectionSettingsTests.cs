@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-
+using Microsoft.Extensions.Logging;
 using Xunit;
+using Xunit.Abstractions;
 
 using Http2;
 
@@ -23,7 +24,15 @@ namespace Http2Tests
                 IsServer = isServer,
                 Settings = settings,
                 StreamListener = (s) => false,
+                Logger = loggerProvider.CreateLogger("http2Con"),
             });
+        }
+
+        private ILoggerProvider loggerProvider;
+
+        public ConnectionSettingsTests(ITestOutputHelper outHelper)
+        {
+            loggerProvider = new XUnitOutputLoggerProvider(outHelper);
         }
 
         async Task ValidateSettingReception(
@@ -103,7 +112,7 @@ namespace Http2Tests
             var http2Con = BuildConnection(true, Settings.Default, inPipe, outPipe);
 
             await ClientPreface.WriteAsync(inPipe);
-            await inPipe.WriteDefaultSettings();
+            await inPipe.WriteSettings(Settings.Default);
 
             await outPipe.ReadAndDiscardSettings();
             await outPipe.AssertSettingsAck();
@@ -151,12 +160,14 @@ namespace Http2Tests
             var outPipe = new BufferedPipe(1024);
             var http2Con = BuildConnection(true, Settings.Default, inPipe, outPipe);
             await ClientPreface.WriteAsync(inPipe);
-            var fh = new FrameHeader {
-                Type = FrameType.Headers, Length = 0, Flags = 0, StreamId = 2
+            var fh = new FrameHeader
+            {
+                Type = FrameType.Headers,
+                Length = 0,
+                Flags = 0,
+                StreamId = 2,
             };
-            var headerBytes = new byte[FrameHeader.HeaderSize];
-            fh.EncodeInto(new ArraySegment<byte>(headerBytes));
-            await inPipe.WriteAsync(new ArraySegment<byte>(headerBytes));
+            await inPipe.WriteFrameHeader(fh);
 
             await outPipe.ReadAndDiscardSettings();
             await outPipe.AssertGoAwayReception(ErrorCode.ProtocolError, 0u);
@@ -176,9 +187,7 @@ namespace Http2Tests
                 Flags = 0,
                 StreamId = 2
             };
-            var headerBytes = new byte[FrameHeader.HeaderSize];
-            fh.EncodeInto(new ArraySegment<byte>(headerBytes));
-            await inPipe.WriteAsync(new ArraySegment<byte>(headerBytes));
+            await inPipe.WriteFrameHeader(fh);
 
             var expected = Settings.Default;
             expected.EnablePush = false;
@@ -196,7 +205,6 @@ namespace Http2Tests
             var http2Con = BuildConnection(true, Settings.Default, inPipe, outPipe);
             await ClientPreface.WriteAsync(inPipe);
 
-            var headerBytes = new byte[FrameHeader.HeaderSize];
             var fh = new FrameHeader
             {
                 Type = FrameType.Settings,
@@ -204,8 +212,7 @@ namespace Http2Tests
                 Flags = 0,
                 StreamId = 1,
             };
-            fh.EncodeInto(new ArraySegment<byte>(headerBytes));
-            await inPipe.WriteAsync(new ArraySegment<byte>(headerBytes));
+            await inPipe.WriteFrameHeader(fh);
 
             await outPipe.ReadAndDiscardSettings();
             await outPipe.AssertGoAwayReception(ErrorCode.ProtocolError, 0u);
@@ -223,7 +230,6 @@ namespace Http2Tests
             var settings = Settings.Default;
             settings.MaxFrameSize = 1; // Invalid
             var settingsData = new byte[settings.RequiredSize];
-            var headerBytes = new byte[FrameHeader.HeaderSize];
             var fh = new FrameHeader
             {
                 Type = FrameType.Settings,
@@ -231,9 +237,8 @@ namespace Http2Tests
                 Flags = 0,
                 StreamId = 0,
             };
-            fh.EncodeInto(new ArraySegment<byte>(headerBytes));
+            await inPipe.WriteFrameHeader(fh);
             settings.EncodeInto(new ArraySegment<byte>(settingsData));
-            await inPipe.WriteAsync(new ArraySegment<byte>(headerBytes));
             await inPipe.WriteAsync(new ArraySegment<byte>(settingsData));
 
             await outPipe.ReadAndDiscardSettings();
@@ -252,7 +257,6 @@ namespace Http2Tests
             var settings = Settings.Default;
             settings.InitialWindowSize = (uint)int.MaxValue + 1u; // Invalid
             var settingsData = new byte[settings.RequiredSize];
-            var headerBytes = new byte[FrameHeader.HeaderSize];
             var fh = new FrameHeader
             {
                 Type = FrameType.Settings,
@@ -260,9 +264,8 @@ namespace Http2Tests
                 Flags = 0,
                 StreamId = 0,
             };
-            fh.EncodeInto(new ArraySegment<byte>(headerBytes));
             settings.EncodeInto(new ArraySegment<byte>(settingsData));
-            await inPipe.WriteAsync(new ArraySegment<byte>(headerBytes));
+            await inPipe.WriteFrameHeader(fh);
             await inPipe.WriteAsync(new ArraySegment<byte>(settingsData));
 
             await outPipe.ReadAndDiscardSettings();
@@ -279,9 +282,7 @@ namespace Http2Tests
             await ClientPreface.WriteAsync(inPipe);
 
             var settings = Settings.Default;
-            settings.MaxFrameSize = 1; // Invalid
-            var settingsData = new byte[settings.RequiredSize+1];
-            var headerBytes = new byte[FrameHeader.HeaderSize];
+            var settingsData = new byte[settings.RequiredSize+1]; // 1 byte extra
             var fh = new FrameHeader
             {
                 Type = FrameType.Settings,
@@ -289,10 +290,9 @@ namespace Http2Tests
                 Flags = 0,
                 StreamId = 0,
             };
-            fh.EncodeInto(new ArraySegment<byte>(headerBytes));
             settings.EncodeInto(new ArraySegment<byte>(
                 settingsData, 0, settingsData.Length - 1));
-            await inPipe.WriteAsync(new ArraySegment<byte>(headerBytes));
+            await inPipe.WriteFrameHeader(fh);
             await inPipe.WriteAsync(new ArraySegment<byte>(settingsData));
 
             await outPipe.ReadAndDiscardSettings();
@@ -308,7 +308,6 @@ namespace Http2Tests
             var http2Con = BuildConnection(true, Settings.Default, inPipe, outPipe);
             await ClientPreface.WriteAsync(inPipe);
 
-            var headerBytes = new byte[FrameHeader.HeaderSize];
             var fh = new FrameHeader
             {
                 Type = FrameType.Settings,
@@ -316,8 +315,7 @@ namespace Http2Tests
                 Flags = 0,
                 StreamId = 0,
             };
-            fh.EncodeInto(new ArraySegment<byte>(headerBytes));
-            await inPipe.WriteAsync(new ArraySegment<byte>(headerBytes));
+            await inPipe.WriteFrameHeader(fh);
 
             await outPipe.ReadAndDiscardSettings();
             await outPipe.AssertGoAwayReception(ErrorCode.FrameSizeError, 0u);
@@ -331,7 +329,7 @@ namespace Http2Tests
             var outPipe = new BufferedPipe(1024);
             var http2Con = BuildConnection(true, Settings.Default, inPipe, outPipe);
             await ClientPreface.WriteAsync(inPipe);
-            await inPipe.WriteDefaultSettings();
+            await inPipe.WriteSettings(Settings.Default);
             // Wait for remote settings
             await outPipe.ReadAndDiscardSettings();
             // Wait for ack to our settings
@@ -349,7 +347,7 @@ namespace Http2Tests
             var outPipe = new BufferedPipe(1024);
             var http2Con = BuildConnection(true, Settings.Default, inPipe, outPipe);
             await ClientPreface.WriteAsync(inPipe);
-            await inPipe.WriteDefaultSettings();
+            await inPipe.WriteSettings(Settings.Default);
             // Wait for remote settings
             await outPipe.ReadAndDiscardSettings();
             // Wait for ack to our settings
@@ -369,7 +367,7 @@ namespace Http2Tests
             var outPipe = new BufferedPipe(1024);
             var http2Con = BuildConnection(true, Settings.Default, inPipe, outPipe);
             await ClientPreface.WriteAsync(inPipe);
-            await inPipe.WriteDefaultSettings();
+            await inPipe.WriteSettings(Settings.Default);
             // Wait for remote settings
             await outPipe.ReadAndDiscardSettings();
             // Wait for ack to our settings
@@ -387,14 +385,18 @@ namespace Http2Tests
             await outPipe.AssertStreamEnd();
         }
 
-        [Fact]
-        public async Task ConnectionShouldGoAwayOnSettingsAckWithNonZeroLength()
+        [Theory]
+        [InlineData(1)]
+        [InlineData(3)]
+        [InlineData(6)]
+        public async Task ConnectionShouldGoAwayOnSettingsAckWithNonZeroLength(
+            int frameLength)
         {
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
             var http2Con = BuildConnection(true, Settings.Default, inPipe, outPipe);
             await ClientPreface.WriteAsync(inPipe);
-            await inPipe.WriteDefaultSettings();
+            await inPipe.WriteSettings(Settings.Default);
             // Wait for remote settings
             await outPipe.ReadAndDiscardSettings();
             // Wait for ack to our settings
@@ -404,7 +406,7 @@ namespace Http2Tests
                 Type = FrameType.Settings,
                 Flags = (byte)SettingsFrameFlags.Ack,
                 StreamId = 0,
-                Length = 3,
+                Length = frameLength,
             };
             await inPipe.WriteFrameHeader(fh);
             // Wait for GoAway due to wrong stream ID

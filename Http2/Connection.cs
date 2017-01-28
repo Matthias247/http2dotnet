@@ -91,6 +91,12 @@ namespace Http2
         private readonly HeaderReader HeaderReader;
         internal readonly Settings LocalSettings;
         internal Settings RemoteSettings = Settings.Default;
+        
+        /// <summary>
+        /// The time time wait for a Client Preface on startup
+        /// at server side.
+        /// </summary>
+        private static readonly int ClientPrefaceTimeout = 1000;
 
         /// <summary>
         /// Whether the connection represents the client or server part of
@@ -203,7 +209,11 @@ namespace Http2
                 if (IsServer)
                 {
                     // TODO: Make the timeout configureable
-                    await ClientPreface.ReadAsync(InputStream, 1000);
+                    await ClientPreface.ReadAsync(InputStream, ClientPrefaceTimeout);
+                    if (logger != null && logger.IsEnabled(LogLevel.Trace))
+                    {
+                        logger.LogTrace("rcvd ClientPreface");
+                    }
                 }
 
                 var continueRead = true;
@@ -297,12 +307,16 @@ namespace Http2
                     }
                 }
             }
-            catch (Exception)
+            catch (Exception e)
             {
                 // We will get here in all cases where the reading task encounters
                 // an exception.
                 // As most exceptions are gracefully handled the remaining ones
                 // will only be cases where the reader fails.
+                if (logger != null && logger.IsEnabled(LogLevel.Error))
+                {
+                    logger.LogError("Reader error: {0}", e);
+                }
             }
 
             // Shutdown the writer
@@ -384,6 +398,17 @@ namespace Http2
 
         private async ValueTask<Http2Error?> HandleHeaders(CompleteHeadersFrameData headers)
         {
+            // Headers with stream ID 0 are a connection error
+            if (headers.StreamId == 0)
+            {
+                return new Http2Error
+                {
+                    StreamId = headers.StreamId,
+                    Code = ErrorCode.ProtocolError,
+                    Message = "Received HEADERS frame with stream ID 0",
+                };
+            }
+
             StreamImpl stream = null;
             lock (shared.Mutex)
             {
@@ -409,6 +434,13 @@ namespace Http2
             // Remark:
             // The HEADERS might also be trailers for a stream which has existed
             // in the past but which was resetted by us in between.
+            // In this case receiving HEADERS for the the stream would be a reason
+            // to send a stream error, but not a connection error.
+            // As the Connection does not track the state of old streams we don't
+            // have information about whether the incoming HEADERS are valid, and
+            // can therefore not send a ProtocolError on the Connection.
+            // Instead we always reset the stream.
+
             // TODO: If the stream is not remoteInitiated we might handle this
             // differently. E.g. we should at least check the stream ID against
             // the highest stream ID that we have used up to now.
@@ -440,6 +472,11 @@ namespace Http2
                         Message = "Refusing stream due to max concurrent streams",
                     };
                 }
+            }
+
+            if (logger != null && logger.IsEnabled(LogLevel.Trace))
+            {
+                logger.LogTrace("Accepted new stream with ID {0}", headers.StreamId);
             }
 
             // Create a new stream for that ID
@@ -505,6 +542,17 @@ namespace Http2
                     Message = "Received invalid DATA frame header",
                 };
             }
+            if ((fh.Flags & (byte)DataFrameFlags.Padded) != 0 &&
+                fh.Length < 1)
+            {
+                // Padded frames must have at least 1 byte
+                return new Http2Error
+                {
+                    StreamId = 0,
+                    Code = ErrorCode.ProtocolError,
+                    Message = "Frame is too small to contain padding",
+                };
+            }
             if (fh.Length > LocalSettings.MaxFrameSize)
             {
                 return new Http2Error
@@ -517,6 +565,8 @@ namespace Http2
 
             // Check if the data frame exceeds the flow control window for the
             // connection
+            // TODO: This is wrong. We need to check for the size without PADDING!
+            // However we don't know the padding here yet.
             if (fh.Length > connReceiveFlowWindow)
             {
                 return new Http2Error
@@ -535,11 +585,12 @@ namespace Http2
                 shared.streamMap.TryGetValue(fh.StreamId, out stream);
             }
 
+            Http2Error? processError = null;
+
             if (stream != null)
             {
                 //Delegate processing of the DATA frame to the stream
-                var err = await stream.ProcessData(fh, InputStream, receiveBuffer);
-                if (err != null) return err;
+                processError = await stream.ProcessData(fh, InputStream, receiveBuffer);
             }
             else
             {
@@ -554,9 +605,36 @@ namespace Http2
                 // Consume the data by reading it into our receiveBuffer
                 await InputStream.ReadAll(
                     new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
+
+                // Check the most necessary things, e.g. if size is valid wrt padding
+                if ((fh.Flags & (byte)DataFrameFlags.Padded) != 0)
+                {
+                    // Access is safe. Length 1 is checked before
+                    var padLen = receiveBuffer[0];
+                    var contentSize = fh.Length - 1 - padLen;
+                    if (contentSize < 0)
+                    {
+                        return new Http2Error
+                        {
+                            StreamId = 0,
+                            Code = ErrorCode.ProtocolError,
+                            Message = "Frame is too small after substracting padding",
+                        };
+                    }
+                }
+
+                // TODO: Send a reset stream in this case?
+                // processError = new Http2Error()...
             }
 
             // Check if we should send a window update for the connection
+            // If we have encountered a connection error we will close anyway
+            // and sending the update is not relevant
+            if (processError.HasValue && processError.Value.StreamId == 0)
+            {
+                return processError;
+            }
+
             var maxWindow = Constants.InitialConnectionWindowSize;
             var possibleWindowUpdate = maxWindow - connReceiveFlowWindow;
             var windowUpdateAmount = 0;
@@ -593,7 +671,7 @@ namespace Http2
                 }
             }
 
-            return null;
+            return processError;
         }
 
         private ValueTask<Http2Error?> HandlePushPromiseFrame(FrameHeader fh)

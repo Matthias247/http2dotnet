@@ -1,8 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.Threading.Tasks;
-
+using Microsoft.Extensions.Logging;
 using Xunit;
+using Xunit.Abstractions;
 
 using Http2;
 
@@ -10,6 +10,13 @@ namespace Http2Tests
 {
     public class ConnectionCompletionTests
     {
+        private ILoggerProvider loggerProvider;
+
+        public ConnectionCompletionTests(ITestOutputHelper outHelper)
+        {
+            loggerProvider = new XUnitOutputLoggerProvider(outHelper);
+        }
+
         [Theory]
         [InlineData(true)]
         [InlineData(false)]
@@ -18,7 +25,7 @@ namespace Http2Tests
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
-                isServer, inPipe, outPipe);
+                isServer, inPipe, outPipe, loggerProvider);
 
             await inPipe.CloseAsync();
             // Expect the connection to close within timeout
@@ -75,7 +82,7 @@ namespace Http2Tests
             var outPipe = new BufferedPipe(1024);
             var failableInPipe = new FailingPipe(inPipe);
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
-                isServer, failableInPipe, outPipe);
+                isServer, failableInPipe, outPipe, loggerProvider);
 
             // Make the next write attempt fail
             failableInPipe.FailNextRead = true;
@@ -102,7 +109,7 @@ namespace Http2Tests
             var outPipe = new BufferedPipe(1024);
             var failableOutPipe = new FailingPipe(outPipe);
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
-                isServer, inPipe, failableOutPipe);
+                isServer, inPipe, failableOutPipe, loggerProvider);
 
             // Make the next write attempt fail
             failableOutPipe.FailNextWrite = true;
@@ -120,5 +127,8 @@ namespace Http2Tests
                 closed == await Task.WhenAny(closed, Task.Delay(1000)),
                 "Expected connection to close");
         }
+
+        // TODO: Add a test if connection closes if external close is requested
+        // as soon as a suitable API was integrated
     }
 }
