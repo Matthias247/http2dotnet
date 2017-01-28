@@ -58,7 +58,7 @@ namespace Http2Tests
             }
 
             public ValueTask<object> CloseAsync()
-            { 
+            {
                 this.CloseCalled = true;
                 return inner.CloseAsync();
             }
@@ -128,7 +128,36 @@ namespace Http2Tests
                 "Expected connection to close");
         }
 
-        // TODO: Add a test if connection closes if external close is requested
-        // as soon as a suitable API was integrated
+        [Fact]
+        public async Task ConnectionShouldCloseAndStreamsShouldGetResetWhenExternalCloseIsRequested()
+        {
+            // TODO: Add a variant of this test for clients as soon as they are supported
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+
+            var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe);
+
+            // Close the connection
+            var closeTask = res.conn.CloseNow();
+            // Expect end of stream
+            await outPipe.AssertStreamEnd();
+            // If the connection was successfully closed close the incoming data
+            // stream, since this is expected from a bidirectional stream implementation
+            await inPipe.CloseAsync();
+            // Close should now be completed
+            await closeTask;
+            // The stream should be reset
+            Assert.Equal(StreamState.Reset, res.stream.State);
+            // Which also means that further writes/reads should fail
+            await Assert.ThrowsAsync<StreamResetException>(async () =>
+            {
+                await res.stream.WriteHeaders(ServerStreamTests.DefaultStatusHeaders, true);
+            });
+            await Assert.ThrowsAsync<StreamResetException>(async () =>
+            {
+                await res.stream.ReadAllToArray();
+            });
+        }
     }
 }

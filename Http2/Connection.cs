@@ -315,7 +315,7 @@ namespace Http2
                 // will only be cases where the reader fails.
                 if (logger != null && logger.IsEnabled(LogLevel.Error))
                 {
-                    logger.LogError("Reader error: {0}", e);
+                    logger.LogError("Reader error: {0}", e.Message);
                 }
             }
 
@@ -328,6 +328,24 @@ namespace Http2
             // Wait until the Writer has closed
             await Writer.Done;
 
+            // Cleanup all streams that are still open
+            Dictionary<uint, StreamImpl> activeStreams = null;
+            lock (shared.Mutex)
+            {
+                // Move the streamMap outside of the mutex. As it is no longer
+                // accessed after cleanup besides the UnregisterStream stream
+                // function which is guarded this is safe
+                activeStreams = shared.streamMap;
+                shared.streamMap = null;
+            }
+            foreach (var kvp in activeStreams)
+            {
+                // fromRemote is set to true since there's no need to send
+                // a Reset frame and the stream will get removed from the
+                // map here
+                await kvp.Value.Reset(ErrorCode.Cancel, fromRemote: true);
+            }
+
             if (logger != null && logger.IsEnabled(LogLevel.Trace))
             {
                 logger.LogTrace("Connection closed");
@@ -335,6 +353,25 @@ namespace Http2
 
             // Once we got here the connection is fully closed and the Done
             // task will be fulfilled.
+        }
+
+        /// <summary>
+        /// Forces closing the connection immediatly.
+        /// This will not send a GOAWAY message.
+        /// Pending streams will get reset.
+        /// </summary>
+        /// <returns>
+        /// A task that will be completed once the connection has fully been
+        /// shut down.
+        /// </returns>
+        public async Task CloseNow()
+        {
+            // Start by closing the writer, which will get the connection close
+            // process (first writer, then reader) into progress.
+            await Writer.CloseNow();
+
+            // And wait for the reader to be done
+            await readerDone;
         }
 
         private async ValueTask<Http2Error?> ReadOneFrame()
@@ -979,7 +1016,10 @@ namespace Http2
         {
             lock (shared.Mutex)
             {
-                shared.streamMap.Remove(stream.Id);
+                if (shared.streamMap != null)
+                {
+                    shared.streamMap.Remove(stream.Id);
+                }
             }
         }
     }

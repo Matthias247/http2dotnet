@@ -203,7 +203,7 @@ namespace Http2
                 // will fail at any point of time
                 if (Connection.logger != null && Connection.logger.IsEnabled(LogLevel.Error))
                 {
-                    Connection.logger.LogError("Writer error: {0}", e);
+                    Connection.logger.LogError("Writer error: {0}", e.Message);
                 }
             }
 
