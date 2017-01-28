@@ -85,8 +85,7 @@ namespace Http2
 
         internal readonly ConnectionWriter Writer;
         internal readonly IReadableByteStream InputStream;
-        private readonly TaskCompletionSource<object> connectionDoneTcs =
-            new TaskCompletionSource<object>();
+        private readonly Task readerDone;
 
         private readonly HeaderReader HeaderReader;
         internal readonly Settings LocalSettings;
@@ -108,7 +107,7 @@ namespace Http2
         /// Returns a Task that will be completed once the Connection has been
         /// fully closed.
         /// </summary>
-        public Task Done => connectionDoneTcs.Task;
+        public Task Done => readerDone;
 
         /// <summary>
         /// Creates a new HTTP/2 connection on top of the a bidirectional stream
@@ -176,8 +175,9 @@ namespace Http2
                 logger
             );
 
-            // Start the task that performs the actual reading
-            Task.Run(() => this.RunReaderAsync());
+            // Start the task that performs the actual reading.
+            // The connection is closed once this task is fully finished.
+            readerDone = Task.Run(() => this.RunReaderAsync());
         }
 
         /// <summary>
@@ -328,13 +328,13 @@ namespace Http2
             // Wait until the Writer has closed
             await Writer.Done;
 
-            // Mark the connection as finished
-            connectionDoneTcs.SetResult(null);
-
             if (logger != null && logger.IsEnabled(LogLevel.Trace))
             {
                 logger.LogTrace("Connection closed");
             }
+
+            // Once we got here the connection is fully closed and the Done
+            // task will be fulfilled.
         }
 
         private async ValueTask<Http2Error?> ReadOneFrame()
