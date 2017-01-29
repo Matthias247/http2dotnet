@@ -101,5 +101,48 @@ namespace Http2Tests
                 totalHeaders.SequenceEqual(receivedHeaders),
                 "Expected to receive all sent headers");
         }
+
+        [Theory]
+        [InlineData(1, 0, FrameType.Continuation)]
+        [InlineData(1, 65536, FrameType.Continuation)]
+        [InlineData(0, null, FrameType.Continuation)]
+        [InlineData(1, null, FrameType.Data)]
+        [InlineData(1, null, FrameType.Ping)]
+        [InlineData(1, null, FrameType.Headers)]
+        public async Task InvalidContinuationFramesShouldLeadToGoAway(
+            uint contStreamId, int? contLength, FrameType contFrameType)
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+
+            Func<IStream, bool> listener = (s) => true;
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                true, inPipe, outPipe, loggerProvider, listener);
+
+            var hEncoder = new Encoder();
+            // Send a valid HEADERS frame
+            await inPipe.WriteHeaders(
+                hEncoder, 1, false,
+                ServerStreamTests.DefaultGetHeaders.Take(2), false);
+
+            // Followed by an invalid continuation frame
+            var outBuf = new byte[Settings.Default.MaxFrameSize];
+            var result = hEncoder.EncodeInto(
+                new ArraySegment<byte>(outBuf),
+                ServerStreamTests.DefaultGetHeaders.Skip(2));
+
+            var length = contLength ?? result.UsedBytes;
+            var fh = new FrameHeader
+            {
+                Type = contFrameType,
+                StreamId = contStreamId,
+                Length = length,
+                Flags = 0,
+            };
+            await inPipe.WriteFrameHeader(fh);
+
+            await outPipe.AssertGoAwayReception(ErrorCode.ProtocolError, 0u);
+            await outPipe.AssertStreamEnd();
+        }
     }
 }
