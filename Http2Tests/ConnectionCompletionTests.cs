@@ -128,6 +128,36 @@ namespace Http2Tests
                 "Expected connection to close");
         }
 
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task ConnectionShouldCloseAndSignalDoneInCaseOfAProtocolError(bool isServer)
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                isServer, inPipe, outPipe, loggerProvider);
+
+            // Cause a protocol error
+            var fh = new FrameHeader
+            {
+                Type = FrameType.Data,
+                StreamId = 0u,
+                Flags = 0,
+                Length = 0,
+            };
+            await inPipe.WriteFrameHeader(fh);
+            await outPipe.AssertGoAwayReception(ErrorCode.ProtocolError, 0u);
+            await outPipe.AssertStreamEnd();
+            await inPipe.CloseAsync();
+            
+            // Expect the connection to close within timeout
+            var closed = http2Con.Done;
+            Assert.True(
+                closed == await Task.WhenAny(closed, Task.Delay(1000)),
+                "Expected connection to close");
+        }
+
         [Fact]
         public async Task ConnectionShouldCloseAndStreamsShouldGetResetWhenExternalCloseIsRequested()
         {

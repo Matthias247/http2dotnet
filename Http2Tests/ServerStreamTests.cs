@@ -306,9 +306,7 @@ namespace Http2Tests
             Assert.Equal(nrStreams, nrAcceptedStreams);
         }
 
-        // TODO: Add checks for the cases were there's no header data left after padding
-        // TODO: Add checks for the cases were HPACK encoding is invalid
-        // TODO: Add checks for whether encoded header size exceeds the max setting
+        // TODO: Add checks for the cases where HPACK encoding is invalid
 
         [Fact]
         public async Task SendingHeadersWithEndOfStreamShouldAllowToReadEndOfStream()

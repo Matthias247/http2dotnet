@@ -63,6 +63,9 @@ namespace Http2
         {
             public object Mutex;
             public Dictionary<uint, StreamImpl> streamMap;
+            /// The last and maximum stream ID that was received from the remote.
+            /// 0 means we never received anything
+            public uint LastIncomingStreamId;
         }
 
         internal SharedData shared;
@@ -73,9 +76,6 @@ namespace Http2
         /// <summary>Flow control window for the connection</summary>
         private int connReceiveFlowWindow = Constants.InitialConnectionWindowSize;
 
-        /// The last and maximum stream ID that was received from the remote.
-        /// 0 means we never received anything
-        uint lastIncomingStreamId = 0;
         /// The last and maximum stream ID that was sent to the remote.
         /// 0 means we never sent anything
         uint lastOutgoingStreamId = 0;
@@ -139,6 +139,7 @@ namespace Http2
             // Initialize shared data
             shared.Mutex = new object();
             shared.streamMap = new Dictionary<uint, StreamImpl>();
+            shared.LastIncomingStreamId = 0u;
 
             // Start the writing task
             Writer = new ConnectionWriter(
@@ -233,20 +234,7 @@ namespace Http2
 
                             // The error is a connection error
                             // Write a suitable GOAWAY frame and stop the writer
-                            var fh = new FrameHeader
-                            {
-                                StreamId = 0,
-                                Type = FrameType.GoAway,
-                                Flags = 0,
-                            };
-                            var goAwayData = new GoAwayFrameData
-                            {
-                                LastStreamId = lastIncomingStreamId,
-                                ErrorCode = err.Value.Code,
-                                DebugData = Constants.EmptyByteArray,
-                            };
-                            // Write the reset frame
-                            await Writer.WriteGoAway(fh, goAwayData, true);
+                            await InitiateGoAway(err.Value.Code, true);
                             // We are not interested in the result of this.
                             // If the connection close couldn't be queued and
                             // performed then the the close was already initiated
@@ -374,6 +362,52 @@ namespace Http2
             await readerDone;
         }
 
+        /// <summary>
+        /// Sends a GOAWAY frame with the given error code to the remote.
+        /// If closeConnection is set to true the connection will be closed
+        /// after to frame has been sent, otherwise not.
+        /// If the connection is also closed the returned task will wait until
+        /// the connection has been fully shut down.
+        /// </summary>
+        public async Task GoAwayAsync(ErrorCode errorCode, bool closeConnection = false)
+        {
+            await InitiateGoAway(errorCode, closeConnection);
+            if (closeConnection)
+            {
+                await Done;
+            }
+        }
+
+        /// <summary>
+        /// Internal version of the GoAway function. This will not wait for the
+        /// connection to close in order not to deadlock when it's u sed from
+        /// inside the Reader routine.
+        /// </summary>
+        private async Task InitiateGoAway(ErrorCode errorCode, bool closeWriter)
+        {
+            uint lastProcessedStreamId = 0u;
+            lock (shared.Mutex)
+            {
+                lastProcessedStreamId = shared.LastIncomingStreamId;
+            }
+
+            var fh = new FrameHeader
+            {
+                Type = FrameType.GoAway,
+                StreamId = 0,
+                Flags = 0,
+            };
+
+            var goAwayData = new GoAwayFrameData
+            {
+                LastStreamId =lastProcessedStreamId,
+                ErrorCode = errorCode,
+                DebugData = Constants.EmptyByteArray,
+            };
+
+            await Writer.WriteGoAway(fh, goAwayData, closeWriter);
+        }
+
         private async ValueTask<Http2Error?> ReadOneFrame()
         {
             var fh = await FrameHeader.ReceiveAsync(InputStream, receiveBuffer);
@@ -447,8 +481,10 @@ namespace Http2
             }
 
             StreamImpl stream = null;
+            uint lastStreamId = 0;
             lock (shared.Mutex)
             {
+                lastStreamId = shared.LastIncomingStreamId;
                 shared.streamMap.TryGetValue(headers.StreamId, out stream);
             }
 
@@ -466,7 +502,7 @@ namespace Http2
             var isValidNewStream =
                 IsServer && // As a client don't accept HEADERS as a way to create a new stream
                 isRemoteInitiated &&
-                (headers.StreamId > lastIncomingStreamId);
+                (headers.StreamId > lastStreamId);
 
             // Remark:
             // The HEADERS might also be trailers for a stream which has existed
@@ -493,11 +529,11 @@ namespace Http2
                 };
             }
 
-            lastIncomingStreamId = headers.StreamId;
-
-            // Check max concurrent streams
             lock (shared.Mutex)
             {
+                shared.LastIncomingStreamId = headers.StreamId;
+
+                // Check max concurrent streams
                 if (shared.streamMap.Count + 1 > LocalSettings.MaxConcurrentStreams)
                 {
                     // Return an error which will trigger a reset frame for
