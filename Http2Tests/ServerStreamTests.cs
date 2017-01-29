@@ -1066,7 +1066,7 @@ namespace Http2Tests
         }
 
         [Fact]
-        public async Task SendingHeadersWithStream0ShouldTriggerAGoAway()
+        public async Task SendingHeadersWithStreamId0ShouldTriggerAGoAway()
         {
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
