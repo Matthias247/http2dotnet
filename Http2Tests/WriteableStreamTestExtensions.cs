@@ -157,7 +157,8 @@ namespace Http2Tests
             Encoder encoder,
             uint streamId,
             bool endOfStream,
-            IEnumerable<HeaderField> headers)
+            IEnumerable<HeaderField> headers,
+            bool endOfHeaders = true)
         {
             var outBuf = new byte[Settings.Default.MaxFrameSize];
             var result = encoder.EncodeInto(new ArraySegment<byte>(outBuf), headers);
@@ -167,11 +168,41 @@ namespace Http2Tests
                 throw new Exception("Could not encode all headers");
             }
 
-            var flags = (byte)(HeadersFrameFlags.EndOfHeaders);
+            byte flags = 0;
+            if (endOfHeaders) flags |= (byte)(HeadersFrameFlags.EndOfHeaders);
             if (endOfStream) flags |= (byte)HeadersFrameFlags.EndOfStream;
             var fh = new FrameHeader
             {
                 Type = FrameType.Headers,
+                Length = result.UsedBytes,
+                Flags = flags,
+                StreamId = streamId,
+            };
+            await stream.WriteFrameHeader(fh);
+            await stream.WriteAsync(
+                new ArraySegment<byte>(outBuf, 0, result.UsedBytes));
+        }
+
+        public static async Task WriteContinuation(
+            this IWriteAndCloseableByteStream stream,
+            Encoder encoder,
+            uint streamId,
+            IEnumerable<HeaderField> headers,
+            bool endOfHeaders = true)
+        {
+            var outBuf = new byte[Settings.Default.MaxFrameSize];
+            var result = encoder.EncodeInto(new ArraySegment<byte>(outBuf), headers);
+            // Check if all headers could be encoded
+            if (result.FieldCount != headers.Count())
+            {
+                throw new Exception("Could not encode all headers");
+            }
+
+            byte flags = 0;
+            if (endOfHeaders) flags |= (byte)ContinuationFrameFlags.EndOfHeaders;
+            var fh = new FrameHeader
+            {
+                Type = FrameType.Continuation,
                 Length = result.UsedBytes,
                 Flags = flags,
                 StreamId = streamId,
