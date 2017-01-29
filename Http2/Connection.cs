@@ -66,6 +66,8 @@ namespace Http2
             /// The last and maximum stream ID that was received from the remote.
             /// 0 means we never received anything
             public uint LastIncomingStreamId;
+            /// Whether a GoAway message has been sent
+            public bool GoAwaySent;
         }
 
         internal SharedData shared;
@@ -140,6 +142,7 @@ namespace Http2
             shared.Mutex = new object();
             shared.streamMap = new Dictionary<uint, StreamImpl>();
             shared.LastIncomingStreamId = 0u;
+            shared.GoAwaySent = false;
 
             // Start the writing task
             Writer = new ConnectionWriter(
@@ -389,6 +392,10 @@ namespace Http2
             lock (shared.Mutex)
             {
                 lastProcessedStreamId = shared.LastIncomingStreamId;
+                shared.GoAwaySent = true;
+                // TODO: Should we check here whether GoAwaySent was already true
+                // However in the case where it was sent and and the connection
+                // close was not initiated we still have to to this
             }
 
             var fh = new FrameHeader
@@ -400,7 +407,7 @@ namespace Http2
 
             var goAwayData = new GoAwayFrameData
             {
-                LastStreamId =lastProcessedStreamId,
+                LastStreamId = lastProcessedStreamId,
                 ErrorCode = errorCode,
                 DebugData = Constants.EmptyByteArray,
             };
@@ -532,6 +539,16 @@ namespace Http2
             lock (shared.Mutex)
             {
                 shared.LastIncomingStreamId = headers.StreamId;
+
+                if (shared.GoAwaySent)
+                {
+                    return new Http2Error
+                    {
+                        StreamId = headers.StreamId,
+                        Code = ErrorCode.RefusedStream,
+                        Message = "Going Away",
+                    };
+                }
 
                 // Check max concurrent streams
                 if (shared.streamMap.Count + 1 > LocalSettings.MaxConcurrentStreams)
