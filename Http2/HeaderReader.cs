@@ -191,7 +191,7 @@ namespace Http2
                     };
                 }
 
-                var contFlags = ((HeadersFrameFlags)contHeader.Flags);
+                var contFlags = ((ContinuationFrameFlags)contHeader.Flags);
                 isEndOfHeaders = contFlags.HasFlag(ContinuationFrameFlags.EndOfHeaders);
 
                 // Read the HeaderBlockFragment of the continuation frame
