@@ -229,5 +229,85 @@ namespace Http2Tests
             await outPipe.AssertGoAwayReception(ErrorCode.ProtocolError, 0u);
             await outPipe.AssertStreamEnd();
         }
+
+        [Theory]
+        [InlineData(123, 123, 0, false)]
+        [InlineData(0, 123, 0, true)]
+        [InlineData(123+3*34, 123+3*34, 0, false)]
+        [InlineData(123+3*34-1, 123+3*34, 0, true)]
+        [InlineData(123+34, 123, 34, false)]
+        [InlineData(123+34, 123, 35, true)]
+        [InlineData(123+34*7, 123+34*3, 34*4, false)]
+        [InlineData(123+34*7, 123+34*3, 34*4+1, true)]
+        public async Task MaxHeaderListSizeViolationsShouldBeDetected(
+            uint maxHeaderListSize,
+            int headersInFirstFrame,
+            int headersInContFrame,
+            bool shouldError)
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+
+            Func<IStream, bool> listener = (s) => true;
+            var settings = Settings.Default;
+            settings.MaxHeaderListSize = maxHeaderListSize;
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                true, inPipe, outPipe, loggerProvider, listener,
+                localSettings: settings,
+                huffmanStrategy: HuffmanStrategy.Never);
+
+            var hEncoder = new Encoder();
+            var headers = new List<HeaderField>();
+            // Add the default headers
+            // These take 123 bytes in store and 3 bytes in transmission
+            headers.AddRange(new HeaderField[]
+            {
+                new HeaderField { Name = ":method", Value = "GET" },
+                new HeaderField { Name = ":path", Value = "/" },
+                new HeaderField { Name = ":scheme", Value = "http" },
+            });
+            var currentHeadersLength = headers
+                .Select(hf => hf.Name.Length + hf.Value.Length + 32)
+                .Sum();
+            // Create a header which takes 34 bytes in store and 5 bytes in transmission
+            var extraHeader = new HeaderField
+            {
+                Name = "a", Value = "b", Sensitive = true
+            };
+            while (currentHeadersLength < headersInFirstFrame)
+            {
+                headers.Add(extraHeader);
+                currentHeadersLength += 1+1+32;
+            }
+
+            await inPipe.WriteHeaders(
+                hEncoder, 1, false,
+                headers, headersInContFrame == 0);
+
+            if (headersInContFrame != 0)
+            {
+                headers.Clear();
+                currentHeadersLength = 0;
+                while (currentHeadersLength < headersInContFrame)
+                {
+                    headers.Add(extraHeader);
+                    currentHeadersLength += 1+1+32;
+                }
+                await inPipe.WriteContinuation(
+                    hEncoder, 1,
+                    headers, true);
+            }
+
+            if (shouldError)
+            {
+                await outPipe.AssertGoAwayReception(ErrorCode.ProtocolError, 0u);
+                await outPipe.AssertStreamEnd();
+            }
+            else
+            {
+                await inPipe.WritePing(new byte[8], false);
+                await outPipe.ReadAndDiscardPong();
+            }
+        }
     }
 }
