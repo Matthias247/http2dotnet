@@ -103,6 +103,91 @@ namespace Http2Tests
         }
 
         [Theory]
+        [InlineData(16384, 8000, 1, 1)]      // No continuation required
+        [InlineData(16384, 16384, 1, 1)]     // No continuation required
+        [InlineData(16384, 100*1024, 7, 7)]  // Continuations required
+        [InlineData(65535, 100*1024, 2, 7)]  // Continuations required
+        public async Task OutgoingHeadersShouldBeFragmentedIntoContinuationsAccordingToFrameSize(
+            int maxFrameSize, int totalHeaderBytes,
+            int expectedMinNrOfFrames, int expectedMaxNrOfFrames)
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            var remoteSettings = Settings.Default;
+            remoteSettings.MaxFrameSize = (uint)maxFrameSize;
+            var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe,
+                remoteSettings: remoteSettings,
+                huffmanStrategy: HuffmanStrategy.Never);
+
+            // Create the list of headers that should be sent
+            // This must be big enough in order to send multiple frames
+            var headers = new List<HeaderField>();
+            // The :status header is necessary to avoid an exception on send
+            headers.AddRange(
+                ServerStreamTests.DefaultStatusHeaders.TakeWhile(sh =>
+                    sh.Name.StartsWith(":")));
+
+            const int headerLen = 3 + 10 + 8; // The calculated size of one header field
+            // Calculate the amount of headers of the given size that are needed
+            // to be sent based on the required totalHeaderBytes number.
+            int requiredHeaderData = totalHeaderBytes - 1; // -1 for :status field
+            int amountHeaders =  requiredHeaderData / headerLen;
+
+            for (var i = 0; i < amountHeaders; i++)
+            {
+                var headerField = new HeaderField
+                {
+                    Name = "hd" + i.ToString("D8"),
+                    Value = i.ToString("D8"),
+                    Sensitive = true,
+                };
+                headers.Add(headerField);
+            }
+
+            // Send the headers in background task
+            var writeHeaderTask = Task.Run(async () =>
+            {
+                await res.stream.WriteHeaders(headers, false);
+            });
+
+            var hDecoder = new Decoder();
+            var hBuf = new byte[maxFrameSize];
+            var expectCont = false;
+            var rcvdFrames = 0;
+            var rcvdHeaders = new List<HeaderField>();
+            while (true)
+            {
+                var fh = await outPipe.ReadFrameHeaderWithTimeout();
+                Assert.Equal(expectCont ? FrameType.Continuation : FrameType.Headers, fh.Type);
+                Assert.Equal(1u, fh.StreamId);
+                Assert.InRange(fh.Length, 1, maxFrameSize);
+                // Read header block fragment data
+                await outPipe.ReadAllWithTimeout(
+                    new ArraySegment<byte>(hBuf, 0, fh.Length));
+                // Decode it
+                var lastHeadersCount = rcvdHeaders.Count;
+                var decodeResult = hDecoder.DecodeHeaderBlockFragment(
+                    new ArraySegment<byte>(hBuf, 0, fh.Length),
+                    int.MaxValue,
+                    rcvdHeaders);
+
+                Assert.True(
+                    rcvdHeaders.Count > lastHeadersCount,
+                    "Expected to retrieve at least one header per frame");
+                Assert.Equal(DecoderExtensions.DecodeStatus.Success, decodeResult.Status);
+
+                expectCont = true;
+                rcvdFrames++;
+
+                if ((fh.Flags & (byte)ContinuationFrameFlags.EndOfHeaders) != 0) break;
+            }
+            Assert.InRange(rcvdFrames, expectedMinNrOfFrames, expectedMaxNrOfFrames);
+            Assert.Equal(headers.Count, rcvdHeaders.Count);
+            Assert.True(rcvdHeaders.SequenceEqual(headers));
+        }
+
+        [Theory]
         [InlineData(1, 0, FrameType.Continuation)]
         [InlineData(1, 65536, FrameType.Continuation)]
         [InlineData(0, null, FrameType.Continuation)]

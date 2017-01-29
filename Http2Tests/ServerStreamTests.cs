@@ -62,7 +62,10 @@ namespace Http2Tests
             public static async Task<Result> CreateConnectionAndStream(
                 StreamState state,
                 ILoggerProvider loggerProvider,
-                IBufferedPipe iPipe, IBufferedPipe oPipe)
+                IBufferedPipe iPipe, IBufferedPipe oPipe,
+                Settings? localSettings = null,
+                Settings? remoteSettings = null,
+                HuffmanStrategy huffmanStrategy = HuffmanStrategy.Never)
             {
                 IStream stream = null;
                 var handlerDone = new SemaphoreSlim(0);
@@ -106,7 +109,10 @@ namespace Http2Tests
                     return true;
                 };
                 var conn = await ConnectionUtils.BuildEstablishedConnection(
-                    true, iPipe, oPipe, loggerProvider, listener);
+                    true, iPipe, oPipe, loggerProvider, listener,
+                    localSettings: localSettings,
+                    remoteSettings: remoteSettings,
+                    huffmanStrategy: huffmanStrategy);
                 var hEncoder = new Encoder();
 
                 await iPipe.WriteHeaders(

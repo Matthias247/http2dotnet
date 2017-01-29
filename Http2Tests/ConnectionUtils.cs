@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
 using Http2;
+using Http2.Hpack;
 
 namespace Http2Tests
 {
@@ -13,7 +14,10 @@ namespace Http2Tests
             IBufferedPipe inputStream,
             IBufferedPipe outputStream,
             ILoggerProvider loggerProvider,
-            Func<IStream, bool> streamListener = null)
+            Func<IStream, bool> streamListener = null,
+            Settings? localSettings = null,
+            Settings? remoteSettings = null,
+            HuffmanStrategy huffmanStrategy = HuffmanStrategy.Never)
         {
             ILogger logger = null;
             if (loggerProvider != null)
@@ -25,17 +29,21 @@ namespace Http2Tests
                 streamListener = (s) => false;
             }
 
+            var lSettings = localSettings ?? Settings.Default;
             var conn = new Connection(new Connection.Options
             {
                 InputStream = inputStream,
                 OutputStream = outputStream,
                 IsServer = isServer,
-                Settings = Settings.Default,
+                Settings = lSettings,
                 Logger = logger,
                 StreamListener = streamListener,
-                HuffmanStrategy = Http2.Hpack.HuffmanStrategy.Never,
+                HuffmanStrategy = huffmanStrategy,
             });
-            await PerformHandshakes(conn, inputStream, outputStream);
+            await PerformHandshakes(
+                conn,
+                inputStream, outputStream,
+                remoteSettings);
 
             return conn;
         }
@@ -43,13 +51,15 @@ namespace Http2Tests
         public static async Task PerformHandshakes(
             this Connection connection,
             IBufferedPipe inputStream,
-            IBufferedPipe outputStream)
+            IBufferedPipe outputStream,
+            Settings? remoteSettings = null)
         {
             if (connection.IsServer)
             {
                 await ClientPreface.WriteAsync(inputStream);
             }
-            await inputStream.WriteSettings(Settings.Default);
+            var rsettings = remoteSettings ?? Settings.Default;
+            await inputStream.WriteSettings(rsettings);
 
             if (!connection.IsServer)
             {

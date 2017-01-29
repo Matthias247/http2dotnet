@@ -374,16 +374,21 @@ namespace Http2
             return null;
         }
 
-        private async ValueTask<object> ProcessWriteRequestAsync(
-            WriteRequest wr, int maxFrameSize)
+        /// <summary>
+        /// Logs the outgoing frames header
+        /// </summary>
+        private void LogOutgoingFrameHeader(FrameHeader fh)
         {
-            // Log the outgoing frame
             if (Connection.logger != null && Connection.logger.IsEnabled(LogLevel.Trace))
             {
                 Connection.logger.LogTrace(
-                    "send " + FramePrinter.PrintFrameHeader(wr.Header));
+                    "send " + FramePrinter.PrintFrameHeader(fh));
             }
+        }
 
+        private async ValueTask<object> ProcessWriteRequestAsync(
+            WriteRequest wr, int maxFrameSize)
+        {
             // TODO: In general we SHOULD check whether the data payload exceeds the
             // maximum frame size. It is just copied at the moment
             // However in general that won't fail, as the maxFrameSize is bigger
@@ -451,6 +456,7 @@ namespace Http2
         private ValueTask<object> WriteWindowUpdateFrame(WriteRequest wr)
         {
             wr.Header.Length = WindowUpdateData.Size;
+            LogOutgoingFrameHeader(wr.Header);
             // Serialize the frame header into the outgoing buffer
             wr.Header.EncodeInto(
                 new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize));
@@ -702,6 +708,9 @@ namespace Http2
             // Reset the padding flag. Padding is not supported
             wr.Header.Flags = (byte)((wr.Header.Flags & ~((uint)DataFrameFlags.Padded)) & 0xFF);
             wr.Header.Length = wr.Data.Count;
+
+            LogOutgoingFrameHeader(wr.Header);
+
             var headerView = new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize);
             wr.Header.EncodeInto(headerView);
 
@@ -717,6 +726,9 @@ namespace Http2
         private ValueTask<object> WritePingFrameAsync(WriteRequest wr)
         {
             wr.Header.Length = 8;
+
+            LogOutgoingFrameHeader(wr.Header);
+
             var headerView = new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize);
             wr.Header.EncodeInto(headerView);
             // Copy the ping payload data into the outgoing array, so we only have 1 write
@@ -734,6 +746,9 @@ namespace Http2
         {
             var dataSize = wr.GoAwayData.RequiredSize;
             wr.Header.Length = dataSize;
+
+            LogOutgoingFrameHeader(wr.Header);
+
             var headerView = new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize);
             wr.Header.EncodeInto(headerView);
             wr.GoAwayData.EncodeInto(new ArraySegment<byte>(outBuf, FrameHeader.HeaderSize, dataSize));
@@ -749,6 +764,7 @@ namespace Http2
         private ValueTask<object> WriteResetFrameAsync(WriteRequest wr)
         {
             wr.Header.Length = ResetFrameData.Size;
+            LogOutgoingFrameHeader(wr.Header);
             // Serialize the frame header into the outgoing buffer
             wr.Header.EncodeInto(new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize));
             wr.ResetFrameData.EncodeInto(new ArraySegment<byte>(outBuf, FrameHeader.HeaderSize, ResetFrameData.Size));
@@ -765,6 +781,7 @@ namespace Http2
         private ValueTask<object> WriteSettingsFrameAsync(WriteRequest wr)
         {
             wr.Header.Length = wr.Data.Count;
+            LogOutgoingFrameHeader(wr.Header);
             var headerView = new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize);
             wr.Header.EncodeInto(headerView);
             // Copy the settings payload data into the outgoing array, so we only have 1 write
@@ -788,6 +805,16 @@ namespace Http2
         private async ValueTask<object> WriteHeadersAsync(
             WriteRequest wr, int maxFrameSize)
         {
+            // Limit the maximum frame size also to the limit of the output
+            // buffer.
+            // If the remote increases the size through SETTINGS update we might
+            // try to write bigger frames, which would however need a bigger
+            // output buffer. Instead of allowing this and reallocating the buffer
+            // we keep the old buffer and use it's max size for headers.
+            maxFrameSize = Math.Min(
+                maxFrameSize,
+                outBuf.Length - FrameHeader.HeaderSize);
+
             var headerView = new ArraySegment<byte>(
                 outBuf, 0, FrameHeader.HeaderSize);
 
@@ -805,9 +832,9 @@ namespace Http2
 
             while (true)
             {
-                // Encode a header block fragment and copy it to the output buffer
+                // Encode a header block fragment into the output buffer
                 var headerBlockFragment = new ArraySegment<byte>(
-                    outBuf, FrameHeader.HeaderSize, maxFrameSize - FrameHeader.HeaderSize);
+                    outBuf, FrameHeader.HeaderSize, maxFrameSize);
                 var encodeResult = this.hEncoder.EncodeInto(
                     headerBlockFragment, headers);
 
@@ -862,6 +889,8 @@ namespace Http2
                     }
                 }
 
+                // Log the complete header
+                LogOutgoingFrameHeader(hdr);
                 // Serialize the frame header and write it together with the header block
                 hdr.EncodeInto(headerView);
                 var dataView = new ArraySegment<byte>(
@@ -886,11 +915,13 @@ namespace Http2
 
         private ValueTask<object> WritePushPromiseAsync(WriteRequest wr)
         {
+            LogOutgoingFrameHeader(wr.Header);
             throw new NotSupportedException("Push promises are not supported");
         }
 
         private ValueTask<object> WritePriorityFrameAsync(WriteRequest wr)
         {
+            LogOutgoingFrameHeader(wr.Header);
             throw new NotSupportedException("Priority is not supported");
         }
 
@@ -998,6 +1029,14 @@ namespace Http2
                 // Update the maximum frame size
                 // Remark: The cast is valid, since the settings are validated before
                 // and the max MaxFrameSize fits into an integer.
+                // Remark 2: In order to send bigger HEADERS/CONTINUATION frames
+                // we would also need to update the size of the output buffer.
+                // This is not done here - instead the size of these frames
+                // will still be clamped to the max output buffer size in the
+                // respective routine. However the output buffer size might be
+                // bigger than the initally set maxFrameSize, as the pool allocator
+                // is able to return a bigger size. In that case the bigger size
+                // will be utilized up to maxFrameSize.
                 this.options.MaxFrameSize = (int)remoteSettings.MaxFrameSize;
 
                 // remoteSettings.MaxHeaderListSize is currently not used
