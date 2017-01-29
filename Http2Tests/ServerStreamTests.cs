@@ -1080,5 +1080,70 @@ namespace Http2Tests
             await outPipe.AssertGoAwayReception(ErrorCode.ProtocolError, 0);
             await outPipe.AssertStreamEnd();
         }
+
+        [Theory]
+        [InlineData(20)]
+        public async Task IncomingStreamsAfterMaxConcurrentStreamsShouldBeRejected(
+            int maxConcurrentStreams)
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            var acceptedStreams = new List<IStream>();
+
+            Func<IStream, bool> listener = (s) =>
+            {
+                lock (acceptedStreams)
+                {
+                    acceptedStreams.Add(s);
+                }
+                return true;
+            };
+            var settings = Settings.Default;
+            settings.MaxConcurrentStreams = (uint)maxConcurrentStreams;
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                true, inPipe, outPipe, loggerProvider, listener,
+                localSettings: settings);
+
+            var hEncoder = new Encoder();
+            // Open maxConcurrentStreams
+            var streamId = 1u;
+            for (var i = 0; i < maxConcurrentStreams; i++)
+            {
+                await inPipe.WriteHeaders(hEncoder, streamId, false, DefaultGetHeaders);
+                streamId += 2;
+            }
+            // Assert no rejection and response so far
+            await inPipe.WritePing(new byte[8], false);
+            await outPipe.ReadAndDiscardPong();
+            lock (acceptedStreams)
+            {
+                Assert.Equal(maxConcurrentStreams, acceptedStreams.Count);
+            }
+            // Try to open an additional stream
+            await inPipe.WriteHeaders(hEncoder, streamId, false, DefaultGetHeaders);
+            // This one should be rejected
+            await outPipe.AssertResetStreamReception(streamId, ErrorCode.RefusedStream);
+            lock (acceptedStreams)
+            {
+                Assert.Equal(maxConcurrentStreams, acceptedStreams.Count);
+            }
+
+            // Once a stream is closed a new one should be acceptable
+            await inPipe.WriteResetStream(streamId-2, ErrorCode.Cancel);
+            streamId += 2;
+            await inPipe.WriteHeaders(hEncoder, streamId, false, DefaultGetHeaders);
+            // Assert no error response
+            await inPipe.WritePing(new byte[8], false);
+            await outPipe.ReadAndDiscardPong();
+            lock (acceptedStreams)
+            {
+                // +1 because the dead stream isn't removed
+                Assert.Equal(maxConcurrentStreams+1, acceptedStreams.Count);
+                // Check if the reset worked
+                Assert.Equal(
+                    StreamState.Reset,
+                    acceptedStreams[acceptedStreams.Count-2].State);
+            }
+        }
     }
 }
