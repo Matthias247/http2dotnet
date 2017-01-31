@@ -310,13 +310,15 @@ namespace Http2
                 }
             }
 
-            // Shutdown the writer
-            // If we get here through a read exception there's no need for GOAWAY
-            // If we get here through GoAwayAndClose we double close
-            // TODO: Review that
+            // Shutdown the writer.
+            // This is necessary if we get here through a read exception, e.g.
+            // because the connection was closed. In this case no GOAWAY is
+            // necessary.
+            // Attempts to double-close the outgoing stream will be caugt and
+            // avoid by the Writer, so calling this is always safe.
             await Writer.CloseNow();
 
-            // Wait until the Writer has closed
+            // Wait until the Writer has been fully shut down.
             await Writer.Done;
 
             // Cleanup all streams that are still open
@@ -389,30 +391,44 @@ namespace Http2
         private async Task InitiateGoAway(ErrorCode errorCode, bool closeWriter)
         {
             uint lastProcessedStreamId = 0u;
+            bool goAwaySent = false;
             lock (shared.Mutex)
             {
                 lastProcessedStreamId = shared.LastIncomingStreamId;
+                // Check if GoAway was already sent/queued
+                goAwaySent = shared.GoAwaySent;
                 shared.GoAwaySent = true;
-                // TODO: Should we check here whether GoAwaySent was already true
-                // However in the case where it was sent and and the connection
-                // close was not initiated we still have to to this
             }
 
-            var fh = new FrameHeader
+            if (goAwaySent)
             {
-                Type = FrameType.GoAway,
-                StreamId = 0,
-                Flags = 0,
-            };
-
-            var goAwayData = new GoAwayFrameData
+                // GoAway message has already been sent to remote.
+                // Initiate only the close procedure here if required
+                // If writer was not stopped do that now.
+                // In this case a force close will be applied.
+                if (closeWriter)
+                {
+                    await Writer.CloseNow();
+                }
+            }
+            else
             {
-                LastStreamId = lastProcessedStreamId,
-                ErrorCode = errorCode,
-                DebugData = Constants.EmptyByteArray,
-            };
+                var fh = new FrameHeader
+                {
+                    Type = FrameType.GoAway,
+                    StreamId = 0,
+                    Flags = 0,
+                };
 
-            await Writer.WriteGoAway(fh, goAwayData, closeWriter);
+                var goAwayData = new GoAwayFrameData
+                {
+                    LastStreamId = lastProcessedStreamId,
+                    ErrorCode = errorCode,
+                    DebugData = Constants.EmptyByteArray,
+                };
+
+                await Writer.WriteGoAway(fh, goAwayData, closeWriter);
+            }
         }
 
         private async ValueTask<Http2Error?> ReadOneFrame()

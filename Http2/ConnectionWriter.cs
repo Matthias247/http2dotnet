@@ -87,8 +87,6 @@ namespace Http2
         /// <summary>Current set of options</summary>
         Options options;
 
-        /// <summary>Whether a goaway frame is already queued</summary>
-        bool goAwayQueued = false;
         /// <summary>Whether the writer was requested to close after completing all writes</summary>
         bool closeRequested = false;
         /// <summary>Whether CloseAsync() has already been called on the connection</summary>

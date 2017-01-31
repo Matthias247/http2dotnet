@@ -45,6 +45,25 @@ namespace Http2Tests
         }
 
         [Fact]
+        public async Task InCaseOfManualGoAwayAndConnectionErrorOnlyASingleGoAwayShouldBeSent()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+
+            var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe);
+
+            // Send the manual GoAway
+            await res.conn.GoAwayAsync(ErrorCode.NoError, false);
+            // Expect to read it
+            await outPipe.AssertGoAwayReception(ErrorCode.NoError, 1u);
+            // And force a connection error that should not yield a further GoAway
+            await inPipe.WriteSettingsAck();
+            // Expect end of stream and not GoAway
+            await outPipe.AssertStreamEnd();
+        }
+
+        [Fact]
         public async Task NewStreamsAfterGoAwayShouldBeRejected()
         {
             var inPipe = new BufferedPipe(1024);
