@@ -100,7 +100,6 @@ namespace Http2
         private Object mutex = new Object();
         private AsyncManualResetEvent wakeupWriter = new AsyncManualResetEvent(false);
         private TaskCompletionSource<bool> doneTcs = new TaskCompletionSource<bool>();
-        private bool closed = false;
 
         private byte[] outBuf;
 
@@ -209,13 +208,18 @@ namespace Http2
             // That's even necessary if the an error happened
             await CloseNow(false);
 
-            // Set the closed flag which will avoid new write items to be added
+            // Set the closeRequested flag which will avoid new write items to be added
+            // In normal close procedure this will already have been set.
+            // But in the case the writer does through an exception it's necessary
             lock (mutex)
             {
-                closed = true;
+                closeRequested = true;
                 // Fail pending writes that are still queued up
                 FinishAllOutstandingWritesLocked();
             }
+
+            // Return buffer to the pool.
+            // As all writes are completed we no longer need it.
             _pool.Return(this.outBuf);
             this.outBuf = null;
             doneTcs.SetResult(true);
@@ -573,7 +577,7 @@ namespace Http2
             WriteRequest wr = null;
             lock (mutex)
             {
-                if (closed || closeRequested)
+                if (closeRequested)
                 {
                     return WriteResult.ConnectionClosedError;
                 }
@@ -937,7 +941,7 @@ namespace Http2
             {
                 // After close is initiated or errors happened no further streams
                 // may be registered
-                if (this.closed)
+                if (this.closeRequested)
                 {
                     return false;
                 }
