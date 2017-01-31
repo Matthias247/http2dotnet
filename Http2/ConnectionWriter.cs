@@ -99,7 +99,7 @@ namespace Http2
 
         private Object mutex = new Object();
         private AsyncManualResetEvent wakeupWriter = new AsyncManualResetEvent(false);
-        private TaskCompletionSource<bool> doneTcs = new TaskCompletionSource<bool>();
+        private Task writeTask;
 
         private byte[] outBuf;
 
@@ -109,10 +109,7 @@ namespace Http2
         /// <summary>
         /// Returns a task that will be completed when the write task finishes
         /// </summary>
-        public Task Done
-        {
-            get { return doneTcs.Task; }
-        }
+        public Task Done => writeTask;
 
         /// <summary>
         /// Creates a new instance of the ConnectionWriter with the given options
@@ -128,7 +125,7 @@ namespace Http2
             // Create a buffer for outgoing data
             this.outBuf = _pool.Rent(FrameHeader.HeaderSize + options.MaxFrameSize);
             // Start the task that performs the actual writing
-            Task.Run(() => this.RunAsync());
+            this.writeTask = Task.Run(() => this.RunAsync());
         }
 
         /// <summary>
@@ -222,7 +219,6 @@ namespace Http2
             // As all writes are completed we no longer need it.
             _pool.Return(this.outBuf);
             this.outBuf = null;
-            doneTcs.SetResult(true);
         }
 
         /// <summary>

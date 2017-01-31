@@ -86,7 +86,6 @@ namespace Http2Tests
             var pipe = new BufferedPipe(50);
             var _ = Task.Run(async () =>
             {
-                await Task.Delay(10);
                 await pipe.WriteAsync(new ArraySegment<byte>(ClientPreface.Bytes));
             });
             await ClientPreface.ReadAsync(pipe, timout);
