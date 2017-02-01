@@ -93,7 +93,7 @@ namespace Http2
             return null;
         }
 
-        public async ValueTask<object> WriteHeaders(IEnumerable<HeaderField> headers, bool endOfStream)
+        public async ValueTask<object> WriteHeadersAsync(IEnumerable<HeaderField> headers, bool endOfStream)
         {
             HeaderValidationResult hvr;
             // TODO: For push promises other validates might need to be used
@@ -170,7 +170,7 @@ namespace Http2
             return null;
         }
 
-        public async ValueTask<object> WriteTrailers(IEnumerable<HeaderField> headers)
+        public async ValueTask<object> WriteTrailersAsync(IEnumerable<HeaderField> headers)
         {
             HeaderValidationResult hvr = HeaderValidator.ValidateTrailingHeaders(headers);
             // TODO: For push promises other validates might need to be used
@@ -521,7 +521,7 @@ namespace Http2
             return this.WriteAsync(Constants.EmptyByteArray, true);
         }
 
-        public async ValueTask<IEnumerable<HeaderField>> ReadHeaders()
+        public async ValueTask<IEnumerable<HeaderField>> ReadHeadersAsync()
         {
             await readHeadersPossible;
             IEnumerable<HeaderField> result = null;
@@ -537,7 +537,7 @@ namespace Http2
             return result;
         }
 
-        public async ValueTask<IEnumerable<HeaderField>> ReadTrailers()
+        public async ValueTask<IEnumerable<HeaderField>> ReadTrailersAsync()
         {
             await readTrailersPossible;
             IEnumerable<HeaderField> result = null;

@@ -81,7 +81,7 @@ namespace Http2Tests
                         stream = s;
                         try
                         {
-                            await s.ReadHeaders();
+                            await s.ReadHeadersAsync();
                             if (state == StreamState.Reset)
                             {
                                 s.Cancel();
@@ -97,7 +97,7 @@ namespace Http2Tests
                             if (state == StreamState.HalfClosedLocal ||
                                 state == StreamState.Closed)
                             {
-                                await s.WriteHeaders(
+                                await s.WriteHeadersAsync(
                                     DefaultStatusHeaders, true);
                             }
                         }
@@ -191,7 +191,7 @@ namespace Http2Tests
                 Interlocked.Increment(ref nrAcceptedStreams);
                 Task.Run(async () =>
                 {
-                    var rcvdHeaders = await s.ReadHeaders();
+                    var rcvdHeaders = await s.ReadHeadersAsync();
                     headersOk = DefaultGetHeaders.SequenceEqual(rcvdHeaders);
                     streamIdOk = s.Id == streamId;
                     streamStateOk = s.State == StreamState.Open;
@@ -246,7 +246,7 @@ namespace Http2Tests
                 Interlocked.Increment(ref nrAcceptedStreams);
                 Task.Run(async () =>
                 {
-                    var rcvdHeaders = await s.ReadHeaders();
+                    var rcvdHeaders = await s.ReadHeadersAsync();
                     headersOk = DefaultGetHeaders.SequenceEqual(rcvdHeaders);
                     streamIdOk = s.Id == streamId;
                     streamStateOk = s.State == StreamState.Open;
@@ -321,7 +321,7 @@ namespace Http2Tests
             {
                 Task.Run(async () =>
                 {
-                    await s.ReadHeaders();
+                    await s.ReadHeadersAsync();
                     var buf = new byte[1024];
                     var res = await s.ReadAsync(new ArraySegment<byte>(buf));
                     gotEos = res.EndOfStream && res.BytesRead == 0;
@@ -380,7 +380,7 @@ namespace Http2Tests
             {
                 Task.Run(async () =>
                 {
-                    await s.ReadHeaders();
+                    await s.ReadHeadersAsync();
                     var data = await s.ReadAllToArrayWithTimeout();
                     receivedData = data;
                     handlerDone.Release();
@@ -588,7 +588,7 @@ namespace Http2Tests
             Assert.Equal(4, bytes.Length);
             Assert.Equal("ABCD", System.Text.Encoding.ASCII.GetString(bytes));
             Assert.Equal(StreamState.HalfClosedRemote, res.stream.State);
-            var rcvdTrailers = await res.stream.ReadTrailers();
+            var rcvdTrailers = await res.stream.ReadTrailersAsync();
             Assert.Equal(trailers, rcvdTrailers);
         }
 
@@ -603,7 +603,7 @@ namespace Http2Tests
 
             var r = await StreamCreator.CreateConnectionAndStream(
                 StreamState.Open, loggerProvider, inPipe, outPipe);
-            await r.stream.WriteHeaders(DefaultStatusHeaders, useEndOfStream);
+            await r.stream.WriteHeadersAsync(DefaultStatusHeaders, useEndOfStream);
 
             // Check the received headers
             var fh = await outPipe.ReadFrameHeaderWithTimeout();
@@ -634,7 +634,7 @@ namespace Http2Tests
 
             var r = await StreamCreator.CreateConnectionAndStream(
                 StreamState.Open, loggerProvider, inPipe, outPipe);
-            await r.stream.WriteHeaders(DefaultStatusHeaders, false);
+            await r.stream.WriteHeadersAsync(DefaultStatusHeaders, false);
             await outPipe.ReadAndDiscardHeaders(1u, false);
 
             var totalToSend = dataLength.Aggregate(0, (sum, n) => sum+n);
@@ -697,7 +697,7 @@ namespace Http2Tests
 
             var r = await StreamCreator.CreateConnectionAndStream(
                 StreamState.Open, loggerProvider, inPipe, outPipe);
-            await r.stream.WriteHeaders(DefaultStatusHeaders, false);
+            await r.stream.WriteHeadersAsync(DefaultStatusHeaders, false);
             await outPipe.ReadAndDiscardHeaders(1u, false);
 
             var dataSize = Settings.Default.MaxFrameSize + 10;
@@ -723,13 +723,13 @@ namespace Http2Tests
 
             var r = await StreamCreator.CreateConnectionAndStream(
                 StreamState.Open, loggerProvider, inPipe, outPipe);
-            await r.stream.WriteHeaders(DefaultStatusHeaders, false);
+            await r.stream.WriteHeadersAsync(DefaultStatusHeaders, false);
             await outPipe.ReadAndDiscardHeaders(1u, false);
             await r.stream.WriteAsync(new ArraySegment<byte>(new byte[0]));
             await outPipe.ReadAndDiscardData(1u, false, 0);
 
             // Send trailers
-            await r.stream.WriteTrailers(DefaultTrailingHeaders);
+            await r.stream.WriteTrailersAsync(DefaultTrailingHeaders);
 
             // Check the received trailers
             var fh = await outPipe.ReadFrameHeaderWithTimeout();
@@ -777,7 +777,7 @@ namespace Http2Tests
                 StreamState.Open, loggerProvider, inPipe, outPipe);
 
             var ex = await Assert.ThrowsAsync<Exception>(async () =>
-                await r.stream.WriteTrailers(DefaultTrailingHeaders));
+                await r.stream.WriteTrailersAsync(DefaultTrailingHeaders));
 
             Assert.Equal("Attempted to write trailers without data", ex.Message);
         }
@@ -790,9 +790,9 @@ namespace Http2Tests
 
             var r = await StreamCreator.CreateConnectionAndStream(
                 StreamState.Open, loggerProvider, inPipe, outPipe);
-            await r.stream.WriteHeaders(DefaultStatusHeaders, false);
+            await r.stream.WriteHeadersAsync(DefaultStatusHeaders, false);
             var ex = await Assert.ThrowsAsync<Exception>(async () =>
-                await r.stream.WriteTrailers(DefaultTrailingHeaders));
+                await r.stream.WriteTrailersAsync(DefaultTrailingHeaders));
 
             Assert.Equal("Attempted to write trailers without data", ex.Message);
         }
@@ -810,8 +810,8 @@ namespace Http2Tests
                 new HeaderField { Name = ":status", Value = "100" },
                 new HeaderField { Name = "extension-field", Value = "bar" },
             };
-            await r.stream.WriteHeaders(infoHeaders, false);
-            await r.stream.WriteHeaders(DefaultStatusHeaders, false);
+            await r.stream.WriteHeadersAsync(infoHeaders, false);
+            await r.stream.WriteHeadersAsync(DefaultStatusHeaders, false);
             await r.stream.WriteAsync(new ArraySegment<byte>(new byte[0]), true);
             await outPipe.ReadAndDiscardHeaders(1, false);
             await outPipe.ReadAndDiscardHeaders(1, false);
@@ -875,7 +875,7 @@ namespace Http2Tests
                 new HeaderField { Name = "status", Value = "200" },
             };
             var ex = await Assert.ThrowsAsync<Exception>(async () =>
-                await r.stream.WriteHeaders(headers, false));
+                await r.stream.WriteHeadersAsync(headers, false));
             Assert.Equal("ErrorInvalidPseudoHeader", ex.Message);
         }
 
@@ -893,7 +893,7 @@ namespace Http2Tests
                 new HeaderField { Name = ":asdf", Value = "200" },
             };
             var ex = await Assert.ThrowsAsync<Exception>(async () =>
-                await r.stream.WriteHeaders(headers, false));
+                await r.stream.WriteHeadersAsync(headers, false));
             Assert.Equal("ErrorInvalidPseudoHeader", ex.Message);
         }
 

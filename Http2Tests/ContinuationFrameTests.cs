@@ -55,7 +55,7 @@ namespace Http2Tests
                 stream = s;
                 Task.Run(async () =>
                 {
-                    receivedHeaders = await s.ReadHeaders();
+                    receivedHeaders = await s.ReadHeadersAsync();
                     handlerDone.Release();
                 });
                 return true;
@@ -148,7 +148,7 @@ namespace Http2Tests
             // Send the headers in background task
             var writeHeaderTask = Task.Run(async () =>
             {
-                await res.stream.WriteHeaders(headers, false);
+                await res.stream.WriteHeadersAsync(headers, false);
             });
 
             var hDecoder = new Decoder();

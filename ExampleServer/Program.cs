@@ -33,7 +33,7 @@ class Program
         try
         {
             // Read the headers
-            var headers = await stream.ReadHeaders();
+            var headers = await stream.ReadHeadersAsync();
             var method = headers.First(h => h.Name == ":method").Value;
             var path = headers.First(h => h.Name == ":path").Value;
             // Print the request method and path
@@ -54,7 +54,7 @@ class Program
                 new HeaderField { Name = ":status", Value = "200" },
                 new HeaderField { Name = "content-type", Value = "text/html" },
             };
-            await stream.WriteHeaders(responseHeaders, false);
+            await stream.WriteHeadersAsync(responseHeaders, false);
             await stream.WriteAsync(new ArraySegment<byte>(
                 Encoding.ASCII.GetBytes("Hello World!")), true);
 

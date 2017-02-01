@@ -33,7 +33,7 @@ class Program
         try
         {
             // Consume headers
-            var headers = await stream.ReadHeaders();
+            var headers = await stream.ReadHeadersAsync();
 
             // Read the request body to the end
             await stream.DrainAsync();
@@ -43,7 +43,7 @@ class Program
                 new HeaderField { Name = ":status", Value = "200" },
                 new HeaderField { Name = "nextone", Value = "i am a header value" },
             };
-            await stream.WriteHeaders(responseHeaders, false);
+            await stream.WriteHeadersAsync(responseHeaders, false);
             await stream.WriteAsync(new ArraySegment<byte>(responseBody), true);
             // Request is fully handled here
         }

@@ -1,7 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -58,7 +55,7 @@ namespace Http2Tests
             {
                 Task.Run(async () =>
                 {
-                    await s.ReadHeaders();
+                    await s.ReadHeadersAsync();
                     var data = await s.ReadAllToArrayWithTimeout();
                 });
                 return true;
@@ -127,7 +124,8 @@ namespace Http2Tests
             var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
                 StreamState.Open, loggerProvider, inPipe, outPipe);
             // Initiate response by sending and consuming headers
-            await res.stream.WriteHeaders(ServerStreamTests.DefaultStatusHeaders, false);
+            await res.stream.WriteHeadersAsync(
+                ServerStreamTests.DefaultStatusHeaders, false);
             await outPipe.ReadAndDiscardHeaders(1u, false);
             // Increase flow control window for connection so that write is blocked
             // on stream window
@@ -167,7 +165,8 @@ namespace Http2Tests
             var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
                 StreamState.Open, loggerProvider, inPipe, outPipe);
             // Initiate response by sending and consuming headers
-            await res.stream.WriteHeaders(ServerStreamTests.DefaultStatusHeaders, false);
+            await res.stream.WriteHeadersAsync(
+                ServerStreamTests.DefaultStatusHeaders, false);
             await outPipe.ReadAndDiscardHeaders(1u, false);
             // Increase flow control window for stream so that write is blocked
             // on connection window
@@ -210,7 +209,8 @@ namespace Http2Tests
             var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
                 StreamState.Open, loggerProvider, inPipe, outPipe);
             // Initiate response by sending and consuming headers
-            await res.stream.WriteHeaders(ServerStreamTests.DefaultStatusHeaders, false);
+            await res.stream.WriteHeadersAsync(
+                ServerStreamTests.DefaultStatusHeaders, false);
             await outPipe.ReadAndDiscardHeaders(1u, false);
             var writeTask = Task.Run(async () =>
             {
@@ -241,7 +241,8 @@ namespace Http2Tests
             var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
                 StreamState.Open, loggerProvider, inPipe, outPipe);
             // Initiate response by sending and consuming headers
-            await res.stream.WriteHeaders(ServerStreamTests.DefaultStatusHeaders, false);
+            await res.stream.WriteHeadersAsync(
+                ServerStreamTests.DefaultStatusHeaders, false);
             await outPipe.ReadAndDiscardHeaders(1u, false);
             // Start discarding all ougoing data -> Not needed for this test
             // and pipe may not be blocked
@@ -274,7 +275,8 @@ namespace Http2Tests
             var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
                 StreamState.Open, loggerProvider, inPipe, outPipe);
             // Initiate response by sending and consuming headers
-            await res.stream.WriteHeaders(ServerStreamTests.DefaultStatusHeaders, false);
+            await res.stream.WriteHeadersAsync(
+                ServerStreamTests.DefaultStatusHeaders, false);
             await outPipe.ReadAndDiscardHeaders(1u, false);
             // Start discarding all ougoing data -> Not needed for this test
             // and pipe may not be blocked

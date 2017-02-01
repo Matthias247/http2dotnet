@@ -123,9 +123,10 @@ After the `Connection` was set up it will handle all HTTP/2 protocol related
 concerns up to the point where the underlying connection gets closed.
 
 The `IStream` class allows to read and write headers and bytes for a single
-HTTP/2 stream. The methods `ReadHeaders()` and `WriteHeaders()` allow to read
-and write headers from a connection. The returned `ValueTask` from `ReadHeaders`
-will only be fulfilled once headers from the remote side where received.
+HTTP/2 stream. The methods `ReadHeadersAsync()` and `WriteHeadersAsync()`
+allow to read and write headers from a connection.
+The returned `ValueTask` from `ReadHeadersAsync` will only be fulfilled once
+headers from the remote side where received.
 According to the HTTP/2 request/reponse lifecycle applications have to send
 headers at the start of each Stream - which means it is not allowed to send
 data before any headers have been sent. The received headers will contain the
@@ -145,18 +146,18 @@ be written through the provided `WriteAsync` function. The returned `Task` will
 only be fulfilled after the data could be sent through the underlying
 connection. This will take the available flow control windows into account. The
 stream can be closed from the by calling the `CloseAsync` function. Alternativly
-the `endOfStream` parameter of `WriteHeaders` can be used for closing the Stream
-without sending any data (e.g. for HTTP GET requests). The read and write
+the `endOfStream` parameter of `WriteHeadersAsync` can be used for closing the
+Stream without sending any data (e.g. for HTTP GET requests). The read and write
 directions of HTTP/2 are fully independet. This means closing the local side of
 the stream will still allow reading headers and data from the remote side. A
 stream is only fully closed after all headers and data were consumed from the
 remote side in addition to the local side having been closed. To read data from
 the stream the `ReadAsync` function can be used. This function will signal the
 end of stream if the stream was closed from the remote side. After a stream was
-closed from the remote side trailers can be read through the `ReadTrailers`
+closed from the remote side trailers can be read through the `ReadTrailersAsync`
 function. To send trailers data must be transferred and instead of closing the
-stream with `CloseAsync` or setting `endOfStream` to `true` the `WriteTrailers`
-function must be used.
+stream with `CloseAsync` or setting `endOfStream` to `true` the
+`WriteTrailersAsync` function must be used.
 
 The `Cancel` function on the `IStream` can be used to reset the stream. This
 will move the Stream into the Closed state if it wasn't Closed before. In order
@@ -173,7 +174,7 @@ static async void HandleIncomingStream(IStream stream)
     try
     {
         // Read the headers
-        var headers = await stream.ReadHeaders();
+        var headers = await stream.ReadHeadersAsync();
         var method = headers.First(h => h.Name == ":method").Value;
         var path = headers.First(h => h.Name == ":path").Value;
         // Print the request method and path
@@ -194,7 +195,7 @@ static async void HandleIncomingStream(IStream stream)
             new HeaderField { Name = ":status", Value = "200" },
             new HeaderField { Name = "content-type", Value = "text/html" },
         };
-        await stream.WriteHeaders(responseHeaders, false);
+        await stream.WriteHeadersAsync(responseHeaders, false);
         await stream.WriteAsync(new ArraySegment<byte>(
             Encoding.ASCII.GetBytes("Hello World!")), true);
 
