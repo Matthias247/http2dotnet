@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -92,6 +93,9 @@ namespace Http2
         private readonly HeaderReader HeaderReader;
         internal readonly Settings LocalSettings;
         internal Settings RemoteSettings = Settings.Default;
+
+        private TaskCompletionSource<GoAwayReason> remoteGoAwayTcs =
+            new TaskCompletionSource<GoAwayReason>();
         
         /// <summary>
         /// The time time wait for a Client Preface on startup
@@ -110,6 +114,14 @@ namespace Http2
         /// fully closed.
         /// </summary>
         public Task Done => readerDone;
+
+        /// <summary>
+        /// Returns a Task that will be completed once a GoAway frame from the
+        /// remote side was received.
+        /// If the connection closes without a GoAway frame the Task will get
+        /// completed with an EndOfStreamException
+        /// </summary>
+        public Task<GoAwayReason> RemoteGoAwayReason => remoteGoAwayTcs.Task;
 
         /// <summary>
         /// Creates a new HTTP/2 connection on top of the a bidirectional stream
@@ -339,6 +351,12 @@ namespace Http2
                 await kvp.Value.Reset(ErrorCode.Cancel, fromRemote: true);
             }
 
+            // If we haven't received a remote GoAway fail that Task
+            if (!remoteGoAwayTcs.Task.IsCompleted)
+            {
+                remoteGoAwayTcs.TrySetException(new EndOfStreamException());
+            }
+
             if (logger != null && logger.IsEnabled(LogLevel.Trace))
             {
                 logger.LogTrace("Connection closed");
@@ -422,9 +440,12 @@ namespace Http2
 
                 var goAwayData = new GoAwayFrameData
                 {
-                    LastStreamId = lastProcessedStreamId,
-                    ErrorCode = errorCode,
-                    DebugData = Constants.EmptyByteArray,
+                    Reason = new GoAwayReason
+                    {
+                        LastStreamId = lastProcessedStreamId,
+                        ErrorCode = errorCode,
+                        DebugData = Constants.EmptyByteArray,
+                    },
                 };
 
                 await Writer.WriteGoAway(fh, goAwayData, closeWriter);
@@ -847,11 +868,23 @@ namespace Http2
             await InputStream.ReadAll(new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
 
             // Deserialize it
-            var goawayData = GoAwayFrameData.DecodeFrom(
+            var goAwayData = GoAwayFrameData.DecodeFrom(
                 new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
 
-            // TODO: Handle the GOAWAY
-            // Remark: goawayData.DebugData is not valid outside of this scope
+            // Pass it to the GoAway task
+            // If we receive multiple GoAways we will only pass the first reason
+            if (!remoteGoAwayTcs.Task.IsCompleted)
+            {
+                // Copy the debug data, since this is not valid
+                // outside of the scope (point to receive buffer)
+                var reason = goAwayData.Reason;
+                var data = reason.DebugData;
+                var debugData = new byte[data.Count];
+                Array.Copy(data.Array, data.Offset, debugData, 0, data.Count);
+                reason.DebugData = new ArraySegment<byte>(debugData);
+                // Complete task
+                remoteGoAwayTcs.TrySetResult(reason);
+            }
 
             return null;
         }

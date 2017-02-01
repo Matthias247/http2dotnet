@@ -425,15 +425,23 @@ namespace Http2
     }
 
     /// <summary>
-    /// Data that is carried inside a GoAway frame
+    /// Describes the reason why a GoAway was sent
     /// </summary>
-    public struct GoAwayFrameData
+    public struct GoAwayReason
     {
         public uint LastStreamId;
         public ErrorCode ErrorCode;
         public ArraySegment<byte> DebugData;
+    }
 
-        public int RequiredSize => 8 + DebugData.Count;
+    /// <summary>
+    /// Data that is carried inside a GoAway frame
+    /// </summary>
+    public struct GoAwayFrameData
+    {
+        public GoAwayReason Reason;
+
+        public int RequiredSize => 8 + Reason.DebugData.Count;
 
         /// <summary>
         /// Encodes the goaway data into the given byte array
@@ -443,17 +451,20 @@ namespace Http2
         {
             var b = bytes.Array;
             var o = bytes.Offset;
-            var errc = (uint)ErrorCode;
+            var errc = (uint)Reason.ErrorCode;
 
-            b[o+0] = (byte)((LastStreamId >> 24) & 0xFF);
-            b[o+1] = (byte)((LastStreamId >> 16) & 0xFF);
-            b[o+2] = (byte)((LastStreamId >> 8) & 0xFF);
-            b[o+3] = (byte)((LastStreamId) & 0xFF);
+            b[o+0] = (byte)((Reason.LastStreamId >> 24) & 0xFF);
+            b[o+1] = (byte)((Reason.LastStreamId >> 16) & 0xFF);
+            b[o+2] = (byte)((Reason.LastStreamId >> 8) & 0xFF);
+            b[o+3] = (byte)((Reason.LastStreamId) & 0xFF);
             b[o+4] = (byte)((errc >> 24) & 0xFF);
             b[o+5] = (byte)((errc >> 16) & 0xFF);
             b[o+6] = (byte)((errc >> 8) & 0xFF);
             b[o+7] = (byte)((errc) & 0xFF);
-            Array.Copy(DebugData.Array, DebugData.Offset, b, o+8, DebugData.Count);
+            Array.Copy(
+                Reason.DebugData.Array, Reason.DebugData.Offset,
+                b, o + 8,
+                Reason.DebugData.Count);
         }
 
         /// <summary>
@@ -479,9 +490,12 @@ namespace Http2
 
             return new GoAwayFrameData
             {
-                LastStreamId = lastStreamId,
-                ErrorCode = (ErrorCode)errc,
-                DebugData = debugData,
+                Reason = new GoAwayReason
+                {
+                    LastStreamId = lastStreamId,
+                    ErrorCode = (ErrorCode)errc,
+                    DebugData = debugData,
+                },
             };
         }
     }

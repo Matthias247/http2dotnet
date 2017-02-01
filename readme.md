@@ -213,7 +213,6 @@ Current limitations
 
 The library currently faces the following limitations:
 - Missing support for creating streams from client side.
-- Missing support for reading the GOAWAY message received from a remote.
 - Missing support for the push promises.
 - Missing support for sending PING frames and waiting for the response.  
   However the library will respond to PING frames which are sent by the remote.

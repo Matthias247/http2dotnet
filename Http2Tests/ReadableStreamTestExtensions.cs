@@ -206,8 +206,8 @@ namespace Http2Tests
             var goAwayBytes = new byte[hdr.Length];
             await stream.ReadAllWithTimeout(new ArraySegment<byte>(goAwayBytes));
             var goAwayData = GoAwayFrameData.DecodeFrom(new ArraySegment<byte>(goAwayBytes));
-            Assert.Equal(lastStreamId, goAwayData.LastStreamId);
-            Assert.Equal(expectedErrorCode, goAwayData.ErrorCode);
+            Assert.Equal(lastStreamId, goAwayData.Reason.LastStreamId);
+            Assert.Equal(expectedErrorCode, goAwayData.Reason.ErrorCode);
         }
 
         public static async Task AssertResetStreamReception(

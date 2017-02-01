@@ -555,7 +555,7 @@ namespace Http2
             // Reset all contained byte arrays so that we leak no
             // data if a pool allocator is used.
             wr.Data = Constants.EmptyByteArray;
-            wr.GoAwayData.DebugData = Constants.EmptyByteArray;
+            wr.GoAwayData.Reason.DebugData = Constants.EmptyByteArray;
             wr.Completed.Reset();
 
             // It would for sure be better if the ConcurrentBag had some kind of

@@ -152,6 +152,38 @@ namespace Http2Tests
             await stream.WriteAsync(new ArraySegment<byte>(dataBytes));
         }
 
+        public static async Task WriteGoAway(
+            this IWriteAndCloseableByteStream stream,
+            uint lastStreamId,
+            ErrorCode errc,
+            byte[] debugData = null)
+        {
+            if (debugData == null) debugData = new byte[0];
+
+            var goAwayData = new GoAwayFrameData
+            {
+                Reason = new GoAwayReason
+                {
+                    LastStreamId = lastStreamId,
+                    ErrorCode = errc,
+                    DebugData = new ArraySegment<byte>(debugData),
+                },
+            };
+
+            var fh = new FrameHeader
+            {
+                Type = FrameType.GoAway,
+                Flags = 0,
+                StreamId = 0,
+                Length = goAwayData.RequiredSize,
+            };
+
+            var dataBytes = new byte[goAwayData.RequiredSize];
+            goAwayData.EncodeInto(new ArraySegment<byte>(dataBytes));
+            await stream.WriteFrameHeader(fh);
+            await stream.WriteAsync(new ArraySegment<byte>(dataBytes));
+        }
+
         public static async Task WriteHeaders(
             this IWriteAndCloseableByteStream stream,
             Encoder encoder,
