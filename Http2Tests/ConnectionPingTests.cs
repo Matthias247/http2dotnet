@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -256,6 +257,27 @@ namespace Http2Tests
                 pingTask == await Task.WhenAny(pingTask, timeoutTask),
                 "Expected pingTask to finish");
             await Assert.ThrowsAsync<ConnectionClosedException>(
+                async () => await pingTask);
+        }
+
+        [Fact]
+        public async Task PingAsyncShouldBeCancellable()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                true, inPipe, outPipe, loggerProvider);
+
+            var cts = new CancellationTokenSource();
+            // Request ping
+            var pingTask = http2Con.PingAsync(cts.Token);
+            // And cancel it
+            cts.Cancel();
+            var timeoutTask = Task.Delay(200);
+            Assert.True(
+                pingTask == await Task.WhenAny(pingTask, timeoutTask),
+                "Expected pingTask to finish");
+            await Assert.ThrowsAsync<TaskCanceledException>(
                 async () => await pingTask);
         }
     }

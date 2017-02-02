@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -446,7 +447,17 @@ namespace Http2
         /// The task will be completed once the associated ping response had
         /// been received.
         /// </summary>
-        public async Task PingAsync()
+        public Task PingAsync()
+        {
+            return PingAsync(CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Sends a PING request to the remote and returns a Task.
+        /// The task will be completed once the associated ping response had
+        /// been received.
+        /// </summary>
+        public async Task PingAsync(CancellationToken ct)
         {
             ulong pingId = 0;
             Task waitTask = null;
@@ -468,6 +479,27 @@ namespace Http2
                 shared.PingState.PingMap[pingId] = tcs;
                 shared.PingState.Counter++;
                 waitTask = tcs.Task;
+            }
+
+            if (ct != CancellationToken.None)
+            {
+                ct.Register(() =>
+                {
+                    lock (shared.Mutex)
+                    {
+                        if (shared.PingState == null)
+                        {
+                            return;
+                        }
+
+                        TaskCompletionSource<bool> tcs = null;
+                        if (shared.PingState.PingMap.TryGetValue(pingId, out tcs))
+                        {
+                            shared.PingState.PingMap.Remove(pingId);
+                            tcs.TrySetCanceled();
+                        }
+                    }
+                }, false);
             }
 
             // Serialize the counter
