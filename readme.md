@@ -208,14 +208,43 @@ static async void HandleIncomingStream(IStream stream)
 }
 ```
 
+### Ping handling
+
+The library will automatically respond to received PING frames
+by sending the associated PING ACKs.
+
+The user can also issue PINGs from the local side of the connection through the
+`PingAsync` method of the `Connection` class. Calling this method will issue
+sending a PING frame to the remote side of the connection. It returns a task
+that will be completed once either the remote side acknowledges the PING or the
+connection was closed. If the connection closes before an ACK was received the
+returned `Task` will fail with a `ConnectionClosedException`.
+
+Example for measuring the connection latency through the ping mechanism:
+
+```cs
+try
+{
+    var stopWatch = new Stopwatch();
+    stopWatch.Start();
+    await http2Connection.PingAsync();
+    // Ping request was sent and acknowledge has been received
+    stopWatch.Stop();
+    var latency = stopWatch.Elapsed;
+}
+catch (ConnectionClosedException)
+{
+    // The connection was closed before an acknowledge to the PING
+    // was received
+}
+```
+
 Current limitations
 -------------------
 
 The library currently faces the following limitations:
 - Missing support for creating streams from client side.
 - Missing support for the push promises.
-- Missing support for sending PING frames and waiting for the response.  
-  However the library will respond to PING frames which are sent by the remote.
 - Missing support for using base64 encoded SETTINGS data in case of connection
   upgrade from HTTP/1.1. This currently doesn't allow the h2c upgrade mechanism.
 - Missing support for reading the remote SETTINGS from application side.

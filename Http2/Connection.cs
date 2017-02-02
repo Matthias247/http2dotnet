@@ -60,18 +60,31 @@ namespace Http2
             public ILogger Logger;
         }
 
-        internal struct SharedData
+        private struct SharedData
         {
             public object Mutex;
+            public bool Closed;
             public Dictionary<uint, StreamImpl> streamMap;
             /// The last and maximum stream ID that was received from the remote.
             /// 0 means we never received anything
             public uint LastIncomingStreamId;
             /// Whether a GoAway message has been sent
             public bool GoAwaySent;
+            /// Tracks active PINGs. Only initialized when needed
+            public PingState PingState;
         }
 
-        internal SharedData shared;
+        /// <summary>
+        /// Contains information about active PINGs
+        /// </summary>
+        private class PingState
+        {
+            public ulong Counter = 0;
+            public Dictionary<ulong, TaskCompletionSource<bool>> PingMap =
+                new Dictionary<ulong, TaskCompletionSource<bool>>();
+        }
+
+        private SharedData shared;
         byte[] receiveBuffer;
         /// <summary>Whether the initial settings have been received from the remote</summary>
         bool settingsReceived = false;
@@ -155,6 +168,8 @@ namespace Http2
             shared.streamMap = new Dictionary<uint, StreamImpl>();
             shared.LastIncomingStreamId = 0u;
             shared.GoAwaySent = false;
+            shared.Closed = false;
+            shared.PingState = null;
 
             // Start the writing task
             Writer = new ConnectionWriter(
@@ -342,6 +357,9 @@ namespace Http2
                 // function which is guarded this is safe
                 activeStreams = shared.streamMap;
                 shared.streamMap = null;
+
+                // Mark connection as closed
+                shared.Closed = true;
             }
             foreach (var kvp in activeStreams)
             {
@@ -349,6 +367,28 @@ namespace Http2
                 // a Reset frame and the stream will get removed from the
                 // map here
                 await kvp.Value.Reset(ErrorCode.Cancel, fromRemote: true);
+            }
+
+            // Cleanup all pending Pings
+            PingState pingState = null;
+            lock (shared.Mutex)
+            {
+                // Extract the PingState
+                // It will no longer be accessed by users, since the Closed flag
+                // already has been set
+                if (shared.PingState != null)
+                {
+                    pingState = shared.PingState;
+                    shared.PingState = null;
+                }
+            }
+            if (pingState != null)
+            {
+                var ex = new ConnectionClosedException();
+                foreach (var kvp in pingState.PingMap)
+                {
+                    kvp.Value.SetException(ex);
+                }
             }
 
             // If we haven't received a remote GoAway fail that Task
@@ -399,6 +439,57 @@ namespace Http2
             {
                 await Done;
             }
+        }
+
+        /// <summary>
+        /// Sends a PING request to the remote and returns a Task.
+        /// The task will be completed once the associated ping response had
+        /// been received.
+        /// </summary>
+        public async Task PingAsync()
+        {
+            ulong pingId = 0;
+            Task waitTask = null;
+            lock (shared.Mutex)
+            {
+                if (shared.Closed)
+                {
+                    // Connection is already closed
+                    throw new ConnectionClosedException();
+                }
+
+                if (shared.PingState == null)
+                {
+                    shared.PingState = new PingState();
+                }
+                // TODO: Check if value is already in use
+                pingId = shared.PingState.Counter;
+                var tcs = new TaskCompletionSource<bool>();
+                shared.PingState.PingMap[pingId] = tcs;
+                shared.PingState.Counter++;
+                waitTask = tcs.Task;
+            }
+
+            // Serialize the counter
+            var fh = new FrameHeader
+            {
+                Type = FrameType.Ping,
+                Flags = 0,
+                StreamId = 0u,
+                Length = 8,
+            };
+
+            var pingBuffer = BitConverter.GetBytes(pingId);
+            var writePingResult = await Writer.WritePing(
+                fh, new ArraySegment<byte>(pingBuffer));
+
+            // Remark: There's no need to handle writePingResult
+            // Sending a ping will only fail in case the connection closes
+            // In this case the returned task will be failed by the cleanup
+            // of the read task of the connection.
+
+            // Wait for the response
+            await waitTask;
         }
 
         /// <summary>
@@ -971,8 +1062,24 @@ namespace Http2
             var hasAck = (fh.Flags & (byte)PingFrameFlags.Ack) != 0;
             if (hasAck)
             {
-                // Do nothing for the moment. We don't send PINGs
-                // Also not worth to treat this as an error
+                // Lookup in our ping map if we have sent this ping
+                TaskCompletionSource<bool> tcs = null;
+                lock (shared.Mutex)
+                {
+                    if (shared.PingState != null)
+                    {
+                        var id = BitConverter.ToUInt64(receiveBuffer, 0);
+                        if (shared.PingState.PingMap.TryGetValue(id, out tcs))
+                        {
+                            // We have sent a ping with that ID
+                            shared.PingState.PingMap.Remove(id);
+                        }
+                    }
+                }
+                if (tcs != null)
+                {
+                    tcs.SetResult(true);
+                }
             }
             else
             {
@@ -1124,5 +1231,12 @@ namespace Http2
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Signals that the connection was closed
+    /// </summary>
+    public class ConnectionClosedException : Exception
+    {
     }
 }
