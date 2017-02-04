@@ -225,7 +225,7 @@ namespace Http2
         /// Forces closing the connection immediatly.
         /// Pending write tasks will fail.
         /// </summary>
-        private async ValueTask<object> CloseNow(bool needWakeup)
+        private async ValueTask<DoneHandle> CloseNow(bool needWakeup)
         {
             if (Interlocked.CompareExchange(ref closeConnectionIssued, 1, 0) == 0)
             {
@@ -256,14 +256,15 @@ namespace Http2
                     wakeupWriter.Set();
                 }
             }
-            return null;
+
+            return DoneHandle.Instance;
         }
 
         /// <summary>
         /// Forces closing the connection immediatly.
         /// Pending write tasks will fail.
         /// </summary>
-        public ValueTask<object> CloseNow()
+        public ValueTask<DoneHandle> CloseNow()
         {
             // This API is called from outside of the write task
             // This means the task might be blocked waiting for a need write
@@ -384,7 +385,7 @@ namespace Http2
             }
         }
 
-        private async ValueTask<object> ProcessWriteRequestAsync(
+        private async Task ProcessWriteRequestAsync(
             WriteRequest wr, int maxFrameSize)
         {
             // TODO: In general we SHOULD check whether the data payload exceeds the
@@ -448,10 +449,9 @@ namespace Http2
 
                 wr.Completed.Set();
             }
-            return null;
         }
 
-        private ValueTask<object> WriteWindowUpdateFrame(WriteRequest wr)
+        private Task WriteWindowUpdateFrame(WriteRequest wr)
         {
             wr.Header.Length = WindowUpdateData.Size;
             LogOutgoingFrameHeader(wr.Header);
@@ -701,7 +701,7 @@ namespace Http2
         /// Writes a DATA frame.
         /// This will not utilize the padding feature currently
         /// </summary>
-        private async ValueTask<object> WriteDataFrameAsync(WriteRequest wr)
+        private async Task WriteDataFrameAsync(WriteRequest wr)
         {
             // Reset the padding flag. Padding is not supported
             wr.Header.Flags = (byte)((wr.Header.Flags & ~((uint)DataFrameFlags.Padded)) & 0xFF);
@@ -714,14 +714,12 @@ namespace Http2
 
             await this.outStream.WriteAsync(headerView);
             await this.outStream.WriteAsync(wr.Data);
-
-            return null;
         }
 
         /// <summary>
         /// Writes a PING frame
         /// </summary>
-        private ValueTask<object> WritePingFrameAsync(WriteRequest wr)
+        private Task WritePingFrameAsync(WriteRequest wr)
         {
             wr.Header.Length = 8;
 
@@ -740,7 +738,7 @@ namespace Http2
         /// <summary>
         /// Writes a GoAway frame
         /// </summary>
-        private ValueTask<object> WriteGoAwayFrameAsync(WriteRequest wr)
+        private Task WriteGoAwayFrameAsync(WriteRequest wr)
         {
             var dataSize = wr.GoAwayData.RequiredSize;
             wr.Header.Length = dataSize;
@@ -759,7 +757,7 @@ namespace Http2
         /// <summary>
         /// Writes a RESET frame
         /// </summary>
-        private ValueTask<object> WriteResetFrameAsync(WriteRequest wr)
+        private Task WriteResetFrameAsync(WriteRequest wr)
         {
             wr.Header.Length = ResetFrameData.Size;
             LogOutgoingFrameHeader(wr.Header);
@@ -776,7 +774,7 @@ namespace Http2
         /// <summary>
         /// Writes a SETTINGS frame
         /// </summary>
-        private ValueTask<object> WriteSettingsFrameAsync(WriteRequest wr)
+        private Task WriteSettingsFrameAsync(WriteRequest wr)
         {
             wr.Header.Length = wr.Data.Count;
             LogOutgoingFrameHeader(wr.Header);
@@ -800,7 +798,7 @@ namespace Http2
         /// multiple continuation frames.
         /// This will not utilize the padding feature currently
         /// </summary>
-        private async ValueTask<object> WriteHeadersAsync(
+        private async Task WriteHeadersAsync(
             WriteRequest wr, int maxFrameSize)
         {
             // Limit the maximum frame size also to the limit of the output
@@ -907,8 +905,6 @@ namespace Http2
                     headers = wr.Headers.Skip(sentHeaders);
                 }
             }
-
-            return null;
         }
 
         private ValueTask<object> WritePushPromiseAsync(WriteRequest wr)

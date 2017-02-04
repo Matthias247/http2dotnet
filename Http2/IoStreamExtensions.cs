@@ -38,7 +38,7 @@ namespace Http2
 
         internal class IoStreamWrapper : IReadableByteStream, IWriteAndCloseableByteStream
         {
-            private System.IO.Stream stream;
+            private readonly System.IO.Stream stream;
 
             public IoStreamWrapper(System.IO.Stream stream)
             {
@@ -71,16 +71,15 @@ namespace Http2
                 return new ValueTask<StreamReadResult>(transformedTask);
             }
 
-            public ValueTask<object> WriteAsync(ArraySegment<byte> buffer)
+            public Task WriteAsync(ArraySegment<byte> buffer)
             {
-                return new ValueTask<object>(
-                    stream.WriteAsync(buffer.Array, buffer.Offset, buffer.Count));
-           }
+                return stream.WriteAsync(buffer.Array, buffer.Offset, buffer.Count);
+            }
 
-            public ValueTask<object> CloseAsync()
+            public Task CloseAsync()
             {
                 stream.Dispose();
-                return new ValueTask<object>(DoneTask.Instance);
+                return Task.CompletedTask;
             }
         }
     }

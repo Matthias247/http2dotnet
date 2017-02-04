@@ -25,7 +25,7 @@ namespace Http2
         /// <summary>
         /// Writes the preface to the given stream
         /// </summary>
-        public static ValueTask<object> WriteAsync(IWriteableByteStream stream)
+        public static Task WriteAsync(IWriteableByteStream stream)
         {
             return stream.WriteAsync(new ArraySegment<byte>(Bytes));
         }
@@ -36,7 +36,7 @@ namespace Http2
         /// Will throw an error if the preface could not be read or if the stream
         /// has finished unexpectedly.
         /// </summary>
-        public static async ValueTask<bool> ReadAsync(IReadableByteStream stream)
+        public static async ValueTask<DoneHandle> ReadAsync(IReadableByteStream stream)
         {
             var buffer = new byte[Length];
             await stream.ReadAll(new ArraySegment<byte>(buffer));
@@ -50,7 +50,7 @@ namespace Http2
                 }
             }
 
-            return true;
+            return DoneHandle.Instance;
         }
 
         /// <summary>
@@ -59,7 +59,7 @@ namespace Http2
         /// Will throw an error if the preface could not be read or if the stream
         /// has finished unexpectedly.
         /// </summary>
-        public static async ValueTask<bool> ReadAsync(
+        public static async ValueTask<DoneHandle> ReadAsync(
             IReadableByteStream stream, int timeoutMillis)
         {
             if (timeoutMillis < 0) throw new ArgumentException(nameof(timeoutMillis));

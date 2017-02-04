@@ -96,7 +96,7 @@ namespace Http2Tests
             };
         }
 
-        public async ValueTask<object> WriteAsync(ArraySegment<byte> buffer)
+        public async Task WriteAsync(ArraySegment<byte> buffer)
         {
             if (buffer.Array == null) throw new ArgumentNullException(nameof(buffer));
 
@@ -119,8 +119,6 @@ namespace Http2Tests
             {
                 writeLock.Release();
             }
-
-            return null;
         }
 
         private async ValueTask<int> WriteOnce(ArraySegment<byte> buffer)
@@ -154,7 +152,7 @@ namespace Http2Tests
             return writeAmount;
         }
 
-        public ValueTask<object> CloseAsync()
+        public Task CloseAsync()
         {
             lock (mutex)
             {
@@ -163,7 +161,7 @@ namespace Http2Tests
 
             canRead.Set();
             canWrite.Set();
-            return new ValueTask<object>(true);
+            return Task.CompletedTask;
         }
     }
 

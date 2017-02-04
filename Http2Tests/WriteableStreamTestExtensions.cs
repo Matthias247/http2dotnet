@@ -40,7 +40,7 @@ namespace Http2Tests
         public static async Task WriteWithTimeout(
             this IWriteAndCloseableByteStream stream, ArraySegment<byte> buf)
         {
-            var writeTask = stream.WriteAsync(buf).AsTask();
+            var writeTask = stream.WriteAsync(buf);
             var timeoutTask = Task.Delay(WriteTimeout);
             var combined = Task.WhenAny(new Task[]{ writeTask, timeoutTask });
             var done = await combined;

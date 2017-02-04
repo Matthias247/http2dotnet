@@ -59,7 +59,7 @@ namespace Http2Tests
             Buffer = new byte[bufferSize];
         }
 
-        async ValueTask<object> IWriteableByteStream.WriteAsync(
+        async Task IWriteableByteStream.WriteAsync(
             ArraySegment<byte> buffer)
         {
             await Task.Run(() =>
@@ -67,8 +67,6 @@ namespace Http2Tests
                 Array.Copy(buffer.Array, 0, Buffer, Written, buffer.Count);
                 Written += buffer.Count;
             });
-
-            return null;
         }
     }
 }

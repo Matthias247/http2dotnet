@@ -75,7 +75,7 @@ namespace Http2
             this.recvBuf = new RingBuf(receiveWindow);
         }
 
-        private async ValueTask<object> SendHeaders(
+        private async Task SendHeaders(
             IEnumerable<HeaderField> headers, bool endOfStream)
         {
             var fhh = new FrameHeader {
@@ -90,10 +90,9 @@ namespace Http2
                 // TODO: Improve the exception
                 throw new Exception("Can not write to stream");
             }
-            return null;
         }
 
-        public async ValueTask<object> WriteHeadersAsync(IEnumerable<HeaderField> headers, bool endOfStream)
+        public async Task WriteHeadersAsync(IEnumerable<HeaderField> headers, bool endOfStream)
         {
             HeaderValidationResult hvr;
             // TODO: For push promises other validates might need to be used
@@ -166,11 +165,9 @@ namespace Http2
                     connection.UnregisterStream(this);
                 }
             }
-
-            return null;
         }
 
-        public async ValueTask<object> WriteTrailersAsync(IEnumerable<HeaderField> headers)
+        public async Task WriteTrailersAsync(IEnumerable<HeaderField> headers)
         {
             HeaderValidationResult hvr = HeaderValidator.ValidateTrailingHeaders(headers);
             // TODO: For push promises other validates might need to be used
@@ -225,8 +222,6 @@ namespace Http2
                     connection.UnregisterStream(this);
                 }
             }
-
-            return null;
         }
 
         public void Cancel()
@@ -404,7 +399,7 @@ namespace Http2
         }
 
         /// <summary>
-        /// Checks whether a window update needs to be sent and enqueues it at the session
+        /// Sends a window update frame for this stream
         /// </summary>
         private async ValueTask<object> SendWindowUpdate(int amount)
         {
@@ -436,12 +431,12 @@ namespace Http2
             return null;
         }
 
-        public ValueTask<object> WriteAsync(ArraySegment<byte> buffer)
+        public Task WriteAsync(ArraySegment<byte> buffer)
         {
             return WriteAsync(buffer, false);
         }
 
-        public async ValueTask<object> WriteAsync(ArraySegment<byte> buffer, bool endOfStream = false)
+        public async Task WriteAsync(ArraySegment<byte> buffer, bool endOfStream = false)
         {
             var removeStream = false;
 
@@ -503,8 +498,6 @@ namespace Http2
                 {
                     throw new Exception("Can not write to stream"); // TODO: Improve me
                 }
-
-                return null;
             }
             finally
             {
@@ -516,12 +509,12 @@ namespace Http2
             }
         }
 
-        public ValueTask<object> CloseAsync()
+        public Task CloseAsync()
         {
             return this.WriteAsync(Constants.EmptyByteArray, true);
         }
 
-        public async ValueTask<IEnumerable<HeaderField>> ReadHeadersAsync()
+        public async Task<IEnumerable<HeaderField>> ReadHeadersAsync()
         {
             await readHeadersPossible;
             IEnumerable<HeaderField> result = null;
@@ -537,7 +530,7 @@ namespace Http2
             return result;
         }
 
-        public async ValueTask<IEnumerable<HeaderField>> ReadTrailersAsync()
+        public async Task<IEnumerable<HeaderField>> ReadTrailersAsync()
         {
             await readTrailersPossible;
             IEnumerable<HeaderField> result = null;

@@ -44,13 +44,13 @@ namespace Http2
         /// These will include all pseudo header fields.
         /// However the validity of the header fields will have been verified.
         /// </summary>
-        ValueTask<IEnumerable<HeaderField>> ReadHeadersAsync();
+        Task<IEnumerable<HeaderField>> ReadHeadersAsync();
 
         /// <summary>
         /// Reads the list of incoming trailing header fields from the stream.
         /// The validity of the header fields will have been verified.
         /// </summary>
-        ValueTask<IEnumerable<HeaderField>> ReadTrailersAsync();
+        Task<IEnumerable<HeaderField>> ReadTrailersAsync();
 
         /// <summary>
         /// Writes a header block for the stream.
@@ -65,7 +65,7 @@ namespace Http2
         /// Whether the stream should be closed with the headers.
         /// If this is set to true no data frames may be written.
         /// </param>
-        ValueTask<object> WriteHeadersAsync(IEnumerable<HeaderField> headers, bool endOfStream);
+        Task WriteHeadersAsync(IEnumerable<HeaderField> headers, bool endOfStream);
 
         /// <summary>
         /// Writes a block of trailing headers for the stream.
@@ -76,7 +76,7 @@ namespace Http2
         /// The list of trailing headers to write.
         /// No pseudo headers must be contained in this list.
         /// </param>
-        ValueTask<object> WriteTrailersAsync(IEnumerable<HeaderField> headers);
+        Task WriteTrailersAsync(IEnumerable<HeaderField> headers);
 
         /// <summary>
         /// Writes data to the stream and optionally allows to signal the end
@@ -87,7 +87,7 @@ namespace Http2
         /// Whether this is the last data block and the stream should be closed
         /// after this operation
         /// </param>
-        ValueTask<object> WriteAsync(ArraySegment<byte> buffer, bool endOfStream = false);
+        Task WriteAsync(ArraySegment<byte> buffer, bool endOfStream = false);
     }
 
     /// <summary>

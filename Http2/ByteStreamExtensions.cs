@@ -18,7 +18,7 @@ namespace Http2
         /// <param name="stream">The stream to read data from</param>
         /// <param name="buffer">The destination buffer</param>
         /// <returns>Awaitable task object</returns>
-        public async static ValueTask<object> ReadAll(
+        public async static ValueTask<DoneHandle> ReadAll(
             this IReadableByteStream stream, ArraySegment<byte> buffer)
         {
             var array = buffer.Array;
@@ -40,7 +40,7 @@ namespace Http2
                 count -= res.BytesRead;
             }
 
-            return null;
+            return DoneHandle.Instance;
         }
     }
 }

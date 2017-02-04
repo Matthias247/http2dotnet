@@ -35,7 +35,7 @@ namespace Http2
         /// <summary>
         /// Writes the buffer to the stream.
         /// </summary>
-        ValueTask<object> WriteAsync(ArraySegment<byte> buffer);
+        Task WriteAsync(ArraySegment<byte> buffer);
     }
 
     public interface ICloseableByteStream
@@ -45,7 +45,7 @@ namespace Http2
         /// This should signal EndOfStream to the receiving side once all prior
         /// data has been read.
         /// </summary>
-        ValueTask<object> CloseAsync();
+        Task CloseAsync();
     }
 
     public interface IWriteAndCloseableByteStream
@@ -54,11 +54,16 @@ namespace Http2
     }
 
     /// <summary>
-    /// A static instance of a completed ValueTask&lt;object&gt;
+    /// A marker class that is used to signal the completion of an Async operation.
+    /// This purely exists since ValueTask&lt;Void&gt; is not valid in C#.
     /// </summary>
-    internal static class DoneTask
+    public class DoneHandle
     {
-        public static readonly ValueTask<object> Instance =
-            new ValueTask<object>(1234);
+        private DoneHandle() {}
+
+        /// <summary>
+        /// A static instance of the Handle
+        /// </summary>
+        public static readonly DoneHandle Instance = new DoneHandle();
     }
 }

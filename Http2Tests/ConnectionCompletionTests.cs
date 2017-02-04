@@ -48,16 +48,16 @@ namespace Http2Tests
                 this.inner = inner;
             }
 
-            public ValueTask<object> WriteAsync(ArraySegment<byte> buffer)
+            public Task WriteAsync(ArraySegment<byte> buffer)
             {
                 if (!FailNextWrite)
                 {
                     return inner.WriteAsync(buffer);
                 }
-                throw new Exception("Write should fail");
+                return Task.FromException(new Exception("Write should fail"));
             }
 
-            public ValueTask<object> CloseAsync()
+            public Task CloseAsync()
             {
                 this.CloseCalled = true;
                 return inner.CloseAsync();

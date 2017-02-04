@@ -132,11 +132,11 @@ namespace Http2
                 return new ValueTask<StreamReadResult>(transformedTask);
             }
 
-            public ValueTask<object> WriteAsync(ArraySegment<byte> buffer)
+            public Task WriteAsync(ArraySegment<byte> buffer)
             {
                 if (buffer.Count == 0)
                 {
-                    return new ValueTask<object>(DoneTask.Instance);
+                    return Task.CompletedTask;
                 }
 
                 // Try a nonblocking write first
@@ -148,26 +148,25 @@ namespace Http2
                     ec != SocketError.WouldBlock &&
                     ec != SocketError.TryAgain)
                 {
-                    return new ValueTask<object>(
-                        Task.FromException(new SocketException((int)ec)));
+                    throw new SocketException((int)ec);
                 }
 
                 if (sent == buffer.Count)
                 {
-                    return new ValueTask<object>(DoneTask.Instance);
+                    return Task.CompletedTask;
                 }
 
                 // More data needs to be sent
                 var remaining = new ArraySegment<byte>(
                     buffer.Array, buffer.Offset + sent, buffer.Count - sent);
-                return new ValueTask<object>(
-                    socket.SendAsync(remaining, SocketFlags.None));
+
+                return socket.SendAsync(remaining, SocketFlags.None);
             }
 
-            public ValueTask<object> CloseAsync()
+            public Task CloseAsync()
             {
                 socket.Dispose();
-                return new ValueTask<object>(DoneTask.Instance);
+                return Task.CompletedTask;
             }
         }
     }
