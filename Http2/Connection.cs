@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.IO;
 using System.Collections.Generic;
 using System.Threading;
@@ -86,7 +87,10 @@ namespace Http2
         }
 
         private SharedData shared;
+
+        private static readonly ArrayPool<byte> _pool = ArrayPool<byte>.Shared;
         byte[] receiveBuffer;
+
         /// <summary>Whether the initial settings have been received from the remote</summary>
         bool settingsReceived = false;
         int nrUnackedSettings = 0;
@@ -162,7 +166,9 @@ namespace Http2
                 throw new ArgumentNullException(nameof(options.StreamListener));
             StreamListener = options.StreamListener;
 
-            receiveBuffer = new byte[LocalSettings.MaxFrameSize + FrameHeader.HeaderSize];
+            // Allocate a receive buffer from the pool
+            receiveBuffer = _pool.Rent(
+                (int)LocalSettings.MaxFrameSize + FrameHeader.HeaderSize);
 
             // Initialize shared data
             shared.Mutex = new object();
@@ -402,6 +408,10 @@ namespace Http2
             {
                 logger.LogTrace("Connection closed");
             }
+
+            // Return the receiveBuffer back to the pool
+            _pool.Return(receiveBuffer);
+            receiveBuffer = null;
 
             // Once we got here the connection is fully closed and the Done
             // task will be fulfilled.

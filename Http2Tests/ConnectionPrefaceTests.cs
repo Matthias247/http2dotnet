@@ -42,6 +42,9 @@ namespace Http2Tests
             this.loggerProvider = new XUnitOutputLoggerProvider(outputHelper);
             // Decrease the timeout for the preface,
             // as this speeds the test up
+            // TODO: This does not seem to work reliably
+            // Most likely the static readonly variable is cached
+            // somewhere and the new value is never applied.
             var timeoutProp =
                 typeof(Connection).GetField(
                     "ClientPrefaceTimeout",
@@ -123,10 +126,10 @@ namespace Http2Tests
 
             var buf = new byte[1];
             var readTask = outPipe.ReadAsync(new ArraySegment<byte>(buf)).AsTask();
-            var timeoutTask = Task.Delay(1000);
-            var combined = Task.WhenAny(new Task[]{ readTask, timeoutTask });
-            var doneTask = await combined;
-            if (ReferenceEquals(doneTask, readTask))
+            var timeoutTask = Task.Delay(1500);
+            var finishedTask = await Task.WhenAny(
+                new Task[]{ readTask, timeoutTask });
+            if (ReferenceEquals(finishedTask, readTask))
             {
                 var res = readTask.Result;
                 Assert.Equal(true, res.EndOfStream);

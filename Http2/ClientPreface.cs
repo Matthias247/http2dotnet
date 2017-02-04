@@ -60,10 +60,10 @@ namespace Http2
         /// has finished unexpectedly.
         /// </summary>
         public static async ValueTask<bool> ReadAsync(
-            IReadableByteStream stream, int timoutMillis)
+            IReadableByteStream stream, int timeoutMillis)
         {
-            if (timoutMillis < 0) throw new ArgumentException(nameof(timoutMillis));
-            else if (timoutMillis == 0)
+            if (timeoutMillis < 0) throw new ArgumentException(nameof(timeoutMillis));
+            else if (timeoutMillis == 0)
             {
                 // No timeout
                 return await ReadAsync(stream);
@@ -71,7 +71,7 @@ namespace Http2
 
             var cts = new CancellationTokenSource();
             var readTask = ReadAsync(stream).AsTask();
-            var timerTask = Task.Delay(timoutMillis, cts.Token);
+            var timerTask = Task.Delay(timeoutMillis, cts.Token);
 
             var finishedTask = await Task.WhenAny(readTask, timerTask);
             var hasTimeout = ReferenceEquals(timerTask, finishedTask);
