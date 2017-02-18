@@ -61,26 +61,13 @@ namespace Http2Tests
                 return true;
             };
 
-            ILogger logger = null;
-            if (loggerProvider != null)
-            {
-                logger = loggerProvider.CreateLogger("http2Con");
-            }
-
             // Lower the initial window size so that stream window updates are
             // sent earlier than connection window updates
             var settings = Settings.Default;
             settings.InitialWindowSize = 16000;
-            var http2Con = new Connection(new Connection.Options
-            {
-                InputStream = inPipe,
-                OutputStream = outPipe,
-                IsServer = true,
-                Settings = settings,
-                Logger = logger,
-                StreamListener = listener,
-            });
-            await http2Con.PerformHandshakes(inPipe, outPipe);
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                true, inPipe, outPipe, loggerProvider, listener,
+                localSettings: settings);
 
             var hEncoder = new Encoder();
             await inPipe.WriteHeaders(hEncoder, 1, false, DefaultGetHeaders);

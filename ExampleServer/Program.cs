@@ -100,7 +100,7 @@ class Program
 
             // Close the connection if we get a GoAway from the client
             var remoteGoAwayTask = http2Con.RemoteGoAwayReason;
-            Task.Run(async () =>
+            var closeWhenRemoteGoAway = Task.Run(async () =>
             {
                 await remoteGoAwayTask;
                 await http2Con.GoAwayAsync(ErrorCode.NoError, true);

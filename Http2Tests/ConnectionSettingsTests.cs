@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Xunit;
 using Xunit.Abstractions;
 
 using Http2;
+using Http2.Hpack;
 
 namespace Http2Tests
 {
@@ -412,6 +414,68 @@ namespace Http2Tests
             // Wait for GoAway due to wrong stream ID
             await outPipe.AssertGoAwayReception(ErrorCode.ProtocolError, 0);
             await outPipe.AssertStreamEnd();
+        }
+
+        [Fact]
+        public async Task IfSettingsDecreaseHeaderTableNextOutgoingHeadersShouldContainAnUpdate()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            var handlerDone = new SemaphoreSlim(0);
+
+            Func<IStream, bool> listener = (s) =>
+            {
+                Task.Run(() =>
+                {
+                    var res = new HeaderField[]
+                    {
+                        new HeaderField { Name = ":status", Value = "200" },
+                    };
+                    s.WriteHeadersAsync(res, false);
+                });
+                handlerDone.Release();
+                return true;
+            };
+
+            // Lower the initial window size so that stream window updates are
+            // sent earlier than connection window updates
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                true, inPipe, outPipe, loggerProvider, listener);
+
+            var settings = Settings.Default;
+            settings.HeaderTableSize = 8;
+            await inPipe.WriteSettings(settings);
+            await outPipe.AssertSettingsAck();
+            settings.HeaderTableSize = 30;
+            await inPipe.WriteSettings(settings);
+            await outPipe.AssertSettingsAck();
+
+            // Establish a stream
+            // When we send a response through it we should observe the size udpate
+            var hEncoder = new Encoder();
+            await inPipe.WriteHeaders(hEncoder, 1, false, ServerStreamTests.DefaultGetHeaders);
+
+            var ok = await handlerDone.WaitAsync(
+                ReadableStreamTestExtensions.ReadTimeout);
+            if (!ok) throw new Exception("Stream was not created");
+
+            // Wait for the incoming status headers with header update
+            var fh = await outPipe.ReadFrameHeaderWithTimeout();
+            Assert.Equal(FrameType.Headers, fh.Type);
+            Assert.Equal((byte)(HeadersFrameFlags.EndOfHeaders), fh.Flags);
+            Assert.Equal(1u, fh.StreamId);
+
+            // Remark: We currently don't increase the header table size ever
+            // That means after it was decreased through the first settings update
+            // it won't be increased in the next one.
+             // If an update changes this behavior this test needs to be updated
+             // to retrieve a third byte
+
+            Assert.Equal(2, fh.Length);
+            var data = new byte[fh.Length];
+            await outPipe.ReadAllWithTimeout(new ArraySegment<byte>(data));
+            Assert.Equal(0x28, data[0]); // Size Update to 8
+            Assert.Equal(0x88, data[1]); // :status 200
         }
     }
 }
