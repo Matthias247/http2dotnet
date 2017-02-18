@@ -23,10 +23,15 @@ namespace HpackTests
             bytes.Add((byte)b);
         }
 
+        public void WriteBytes(byte[] bytes)
+        {
+            foreach (var b in bytes) WriteByte(b);
+        }
+
         public void WriteString(string s)
         {
             var bytes = Encoding.ASCII.GetBytes(s);
-            foreach (var b in bytes) WriteByte(b);
+            WriteBytes(bytes);
         }
 
         public void AddHexString(string s)

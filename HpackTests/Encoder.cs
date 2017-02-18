@@ -54,6 +54,91 @@ namespace HpackTests
             Assert.Equal(200, encoder.DynamicTableSize);
         }
 
+        [Theory]
+        [InlineData(0)]
+        [InlineData(30)]
+        [InlineData(16535)]
+        public void SizeUpdatesShouldBeEncodedWithinNextHeaderBlock(
+            int newSize)
+        {
+            var encoder = new Encoder(new Encoder.Options{
+                HuffmanStrategy = HuffmanStrategy.Never,
+            });
+            encoder.DynamicTableSize = newSize;
+
+            var expectedTableUpdateBytes = IntEncoder.Encode(newSize, 0x20, 5);
+
+            var fields = new HeaderField[] {
+                new HeaderField{ Name = "ab", Value = "cd", Sensitive = true }
+            };
+
+            var result = new Buffer();
+            result.WriteBytes(expectedTableUpdateBytes);
+            result.AddHexString("1002");
+            result.WriteString("ab");
+            result.AddHexString("02");
+            result.WriteString("cd");
+
+            var res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
+            Assert.Equal(result.Bytes, res.Bytes);
+            Assert.Equal(1, res.FieldCount);
+            Assert.Equal(0, encoder.DynamicTableUsedSize);
+            Assert.Equal(0, encoder.DynamicTableLength);
+            Assert.Equal(newSize, encoder.DynamicTableSize);
+        }
+
+        [Theory]
+        [InlineData(new int[]{0, 30}, "203e")]
+        [InlineData(new int[]{30, 0}, "20")]
+        [InlineData(new int[]{5000, 0, 30}, "203e")]
+        [InlineData(new int[]{5000, 0, 30, 0}, "20")]
+        [InlineData(new int[]{5000, 15, 30, 0}, "20")]
+        [InlineData(new int[]{5000, 15, 30, 7, 10}, "272a")]
+        public void IfSizeIsChangedMultipleTimesAllNecessaryUpdatesShouldBeEncoded(
+            int[] sizeChanges, string expectedTableUpdateHexBytes)
+        {
+            var encoder = new Encoder(new Encoder.Options{
+                HuffmanStrategy = HuffmanStrategy.Never,
+            });
+            foreach (var newSize in sizeChanges)
+            {
+                encoder.DynamicTableSize = newSize;
+            }
+
+            var fields = new HeaderField[] {
+                new HeaderField{ Name = "ab", Value = "cd", Sensitive = true }
+            };
+
+            var result = new Buffer();
+            result.AddHexString(expectedTableUpdateHexBytes);
+            result.AddHexString("1002");
+            result.WriteString("ab");
+            result.AddHexString("02");
+            result.WriteString("cd");
+
+            var res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
+            Assert.Equal(result.Bytes, res.Bytes);
+            Assert.Equal(1, res.FieldCount);
+            Assert.Equal(0, encoder.DynamicTableUsedSize);
+            Assert.Equal(0, encoder.DynamicTableLength);
+            Assert.Equal(sizeChanges[sizeChanges.Length-1], encoder.DynamicTableSize);
+
+            // Encode a further header block
+            // This may not contain any tableupdate data
+            result = new Buffer();
+            result.AddHexString("1002");
+            result.WriteString("ab");
+            result.AddHexString("02");
+            result.WriteString("cd");
+
+            res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
+            Assert.Equal(result.Bytes, res.Bytes);
+            Assert.Equal(1, res.FieldCount);
+            Assert.Equal(0, encoder.DynamicTableUsedSize);
+            Assert.Equal(0, encoder.DynamicTableLength);
+            Assert.Equal(sizeChanges[sizeChanges.Length-1], encoder.DynamicTableSize);
+        }
+
         [Fact]
         public void ShouldHandleExampleC2_1OfTheSpecificationCorrectly()
         {
@@ -83,6 +168,7 @@ namespace HpackTests
                 HuffmanStrategy = HuffmanStrategy.Never,
             });
             // Decrease table size to avoid using indexing
+            // This will enforce a table size update which we need to compensate for
             encoder.DynamicTableSize = 0;
             var fields = new HeaderField[] {
                 new HeaderField{ Name = ":path", Value = "/sample/path", Sensitive = false }
@@ -90,7 +176,7 @@ namespace HpackTests
 
             // first item with name :path
             var result = new Buffer();
-            result.AddHexString("040c2f73616d706c652f70617468");
+            result.AddHexString("20040c2f73616d706c652f70617468");
 
             var res = EncodeToTempBuf(encoder, fields, MaxFrameSize);
             Assert.Equal(result.Bytes, res.Bytes);

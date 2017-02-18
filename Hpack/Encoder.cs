@@ -42,16 +42,46 @@ namespace Http2.Hpack
         HuffmanStrategy _huffmanStrategy;
 
         /// <summary>
+        /// The minimum table size that existed between encoding 2 header blocks.
+        /// -1 means no update must be transmitted.
+        /// </summary>
+        int _tableSizeUpdateMinValue = -1;
+        /// <summary>
+        /// The table size that must be communicated to the remote in the next
+        /// header block after a table update was performed.
+        /// -1 means no update must be transmitted.
+        /// </summary>
+        int _tableSizeUpdateFinalValue = -1;
+
+        /// <summary>
         /// The current maximum size of the dynamic table.
         /// Setting the size might cause evictions.
         /// If the size is changed a header table size update must be sent to the
-        /// remote peer. That must be encoded seperatly with the EncodeSizeUpdate()
-        /// function.
+        /// remote peer. The new table size will be sent at the start of the next
+        /// encoded header block to the remote peer.
         /// </summary>
         public int DynamicTableSize
         {
-           get { return this._headerTable.MaxDynamicTableSize; }
-           set { this._headerTable.MaxDynamicTableSize = value; }
+            get { return this._headerTable.MaxDynamicTableSize; }
+            set
+            {
+                var current = _headerTable.MaxDynamicTableSize;
+                if (current == value) return;
+                // Track whether a sending a header table size update is required
+                // when encoding the next header block.
+                // We might need to send multiple size updates in the worst case,
+                // if the remote requires multiple table size updates.
+                // If the size is only inreased or only decreased we can simply
+                // use the latest value. However if the size is first decreased
+                // and then increased we must also announce the lowest value to
+                // trigger the eviction process.
+                _tableSizeUpdateFinalValue = value;
+                if (_tableSizeUpdateMinValue == -1 || value < _tableSizeUpdateMinValue)
+                {
+                    _tableSizeUpdateMinValue = value;
+                }
+                this._headerTable.MaxDynamicTableSize = value;
+            }
         }
 
         /// <summary> Gets the actual used size for the dynamic table</summary>
@@ -103,15 +133,6 @@ namespace Http2.Hpack
         }
 
         /// <summary>
-        /// Encodes the current dynamic table size into a size update message
-        /// and returns that
-        /// </summary>
-        private byte[] EncodeSizeUpdate()
-        {
-            return IntEncoder.Encode(this.DynamicTableSize, 0x20, 5);
-        }
-
-        /// <summary>
         /// Encodes the list of the given header fields into a Buffer, which
         /// represents the data part of a header block fragment.
         /// The operation will only try to write as much headers as fit in the
@@ -134,6 +155,54 @@ namespace Http2.Hpack
             var nrEncodedHeaders = 0;
             var offset = buf.Offset;
             var count = buf.Count;
+
+            // Encode table size updates at the beginning of the headers
+            // If the minimum size equals the final size we do not need to
+            // transmit both.
+            var tableUpdatesOk = true;
+            if (_tableSizeUpdateMinValue != -1 &&
+                _tableSizeUpdateMinValue != _tableSizeUpdateFinalValue)
+            {
+                var used = IntEncoder.EncodeInto(
+                    new ArraySegment<byte>(buf.Array, offset, count),
+                    this._tableSizeUpdateMinValue, 0x20, 5);
+                if (used == -1)
+                {
+                    tableUpdatesOk = false;
+                }
+                else
+                {
+                    offset += used;
+                    count -= used;
+                    _tableSizeUpdateMinValue = -1;
+                }
+            }
+            if (_tableSizeUpdateFinalValue != -1)
+            {
+                var used = IntEncoder.EncodeInto(
+                    new ArraySegment<byte>(buf.Array, offset, count),
+                    this._tableSizeUpdateFinalValue, 0x20, 5);
+                if (used == -1)
+                {
+                    tableUpdatesOk = false;
+                }
+                else
+                {
+                    offset += used;
+                    count -= used;
+                    _tableSizeUpdateMinValue = -1;
+                    _tableSizeUpdateFinalValue = -1;
+                }
+            }
+
+            if (!tableUpdatesOk)
+            {
+                return new Result
+                {
+                    UsedBytes = 0,
+                    FieldCount = 0,
+                }; 
+            }
 
             foreach (var header in headers)
             {

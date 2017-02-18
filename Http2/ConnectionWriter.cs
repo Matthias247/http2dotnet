@@ -1129,24 +1129,23 @@ namespace Http2
 
             // remoteSettings.MaxHeaderListSize is currently not used
 
-            // Update the maximum HPack table size
+            // Update the maximum HPACK table size
             if (this.hEncoder.DynamicTableSize <= remoteSettings.HeaderTableSize)
             {
                 // We can just keep the current setting
                 // There's no need to use a bigger setting, it's just an
                 // option that is granted to us from the remote.
+                // TODO: If the peer lowers the header table size through the
+                // else branch it will never be able to increase it again,
+                // since we don't have a setting anywhere on how big the table
+                // size should be growable.
             }
             else
             {
-                // We should lower our header table size and send a notification
-                // about that. However this this currently not supported.
-                // Additionally changing the size would cause a data race, as
-                // it is concurrently used by the writer process.
-                // We can continue the old settings and hope that the remote
-                // won't reset the connection. This will only affect compatibility
-                // with systems that use and enforce a header table size lower
-                // than the default one.
-                // TODO: Support also this case
+                // We need to lower our header table size.
+                // The next header block that we encode will contain a
+                // notification about it.
+                this.hEncoder.DynamicTableSize = (int)remoteSettings.HeaderTableSize;
             }
 
             // Update all streams windows
