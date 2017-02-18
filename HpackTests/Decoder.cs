@@ -445,9 +445,12 @@ namespace HpackTests
         [Fact]
         public void ShouldThrowAnErrorIfTableSizeUpdateExceedsLimit()
         {
-            var decoder = new Decoder();
+            var decoder = new Decoder(new Decoder.Options
+            {
+                DynamicTableSize = 100,
+                DynamicTableSizeLimit = 100,
+            });
 
-            decoder.DynamicTableSizeLimit = 100;
             var buf = new Buffer();
             buf.WriteByte(0x3F); // I = 31
             buf.WriteByte(0x80); // I = 31

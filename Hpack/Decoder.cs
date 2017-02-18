@@ -102,28 +102,22 @@ namespace Http2.Hpack
         private bool _addToTable = false;
         private bool _sensitive = false;
 
-        /// <summary> Returns the current maximum size of the dynamic table</summary>
+        /// <summary>Returns the current maximum size of the dynamic table</summary>
         public int DynamicTableSize => this._headerTable.MaxDynamicTableSize;
 
-        /// <summary> Gets the actual used size for the dynamic table</summary>
+        /// <summary>Gets the actual used size for the dynamic table</summary>
         public int DynamicTableUsedSize => this._headerTable.UsedDynamicTableSize;
 
-        /// <summary> Gets the number of elements in the dynamic table</summary>
+        /// <summary>Gets the number of elements in the dynamic table</summary>
         public int DynamicTableLength => this._headerTable.DynamicTableLength;
 
-        /// <summary> Returns the limit for the dynamic table size</summary>
-        public int DynamicTableSizeLimit
-        {
-            get { return this._dynamicTableSizeLimit; }
-            set
-            {
-                if (value < 0) throw new ArgumentException(nameof(DynamicTableSizeLimit));
-                this._dynamicTableSizeLimit = value;
-                // TODO: Evict table if limit < actual size of the table
-                // Later added TODO: When would this be used?
-                // The limit should be only set once
-            }
-        }
+        /// <summary>
+        /// Returns the limit for the dynamic table size. This is the maximum
+        /// amount of bytes the HeaderTable can grow to through table size updates.
+        /// If table updates are received that are requesting a higher size then
+        /// the decoding the table size update will fail.
+        /// </summary>
+        public int DynamicTableSizeLimit => this._dynamicTableSizeLimit;
 
         /// <summary>
         /// Creates a new HPACK decoder with default options
