@@ -421,6 +421,56 @@ namespace Http2Tests
         {
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
+
+            Func<IStream, bool> listener = (s) =>
+            {
+                Task.Run(() =>
+                {
+                    var res = new HeaderField[]
+                    {
+                        new HeaderField { Name = ":status", Value = "200" },
+                    };
+                    s.WriteHeadersAsync(res, false);
+                });
+                return true;
+            };
+
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                true, inPipe, outPipe, loggerProvider, listener);
+
+            // Change remote settings 2 times
+            var settings = Settings.Default;
+            settings.HeaderTableSize = 8;
+            await inPipe.WriteSettings(settings);
+            await outPipe.AssertSettingsAck();
+            settings.HeaderTableSize = 30;
+            await inPipe.WriteSettings(settings);
+            await outPipe.AssertSettingsAck();
+
+            // Establish a stream
+            // When we send a response through it we should observe the size udpate
+            var hEncoder = new Encoder();
+            await inPipe.WriteHeaders(hEncoder, 1, false, ServerStreamTests.DefaultGetHeaders);
+
+            // Wait for the incoming status headers with header update
+            var fh = await outPipe.ReadFrameHeaderWithTimeout();
+            Assert.Equal(FrameType.Headers, fh.Type);
+            Assert.Equal((byte)(HeadersFrameFlags.EndOfHeaders), fh.Flags);
+            Assert.Equal(1u, fh.StreamId);
+
+            Assert.Equal(3, fh.Length);
+            var data = new byte[fh.Length];
+            await outPipe.ReadAllWithTimeout(new ArraySegment<byte>(data));
+            Assert.Equal(0x28, data[0]); // Size Update to 8
+            Assert.Equal(0x3e, data[1]); // Size Update to 30
+            Assert.Equal(0x88, data[2]); // :status 200
+        }
+
+        [Fact]
+        public async Task TheRemoteHeaderTableSizeShouldOnlyBeUsedUpToConfiguredLimit()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
             var handlerDone = new SemaphoreSlim(0);
 
             Func<IStream, bool> listener = (s) =>
@@ -439,14 +489,15 @@ namespace Http2Tests
 
             // Lower the initial window size so that stream window updates are
             // sent earlier than connection window updates
+            var localSettings = Settings.Default;
+            localSettings.HeaderTableSize = 20000;
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
-                true, inPipe, outPipe, loggerProvider, listener);
+                true, inPipe, outPipe, loggerProvider, listener,
+                localSettings: localSettings);
 
+            // Change remote settings, which grants us a giant header table
             var settings = Settings.Default;
-            settings.HeaderTableSize = 8;
-            await inPipe.WriteSettings(settings);
-            await outPipe.AssertSettingsAck();
-            settings.HeaderTableSize = 30;
+            settings.HeaderTableSize = 50*1024*1024;
             await inPipe.WriteSettings(settings);
             await outPipe.AssertSettingsAck();
 
@@ -465,17 +516,16 @@ namespace Http2Tests
             Assert.Equal((byte)(HeadersFrameFlags.EndOfHeaders), fh.Flags);
             Assert.Equal(1u, fh.StreamId);
 
-            // Remark: We currently don't increase the header table size ever
-            // That means after it was decreased through the first settings update
-            // it won't be increased in the next one.
-             // If an update changes this behavior this test needs to be updated
-             // to retrieve a third byte
-
-            Assert.Equal(2, fh.Length);
+            // Observe headers with status update
+            // We should update the header table to 20000
+            Assert.Equal(5, fh.Length);
             var data = new byte[fh.Length];
             await outPipe.ReadAllWithTimeout(new ArraySegment<byte>(data));
-            Assert.Equal(0x28, data[0]); // Size Update to 8
-            Assert.Equal(0x88, data[1]); // :status 200
+            Assert.Equal(0x3f, data[0]); // Size Update to 20000 => 20000 - 31 = 19969
+            Assert.Equal(0x81, data[1]); // 19969 % 128 + 128 = 0x81, 19969 / 128 = 156
+            Assert.Equal(0x9c, data[2]); // 156 % 128 + 128 = 0x9c, 156 / 128 = 1
+            Assert.Equal(0x01, data[3]); // 1
+            Assert.Equal(0x88, data[4]); // :status 200
         }
     }
 }

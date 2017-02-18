@@ -178,6 +178,12 @@ namespace Http2
             shared.Closed = false;
             shared.PingState = null;
 
+            // Clamp the dynamic table size limit to int range.
+            // We will use the dynamic table size limit that was set for
+            // receiving headers also for sending headers, which means to limit
+            // the header table size for header encoding.
+            var dynTableSizeLimit = Math.Min(localSettings.HeaderTableSize, int.MaxValue);
+
             // Start the writing task
             writer = new ConnectionWriter(
                 this, options.OutputStream,
@@ -185,6 +191,7 @@ namespace Http2
                 {
                     MaxFrameSize = (int)remoteSettings.MaxFrameSize,
                     MaxHeaderListSize = (int)remoteSettings.MaxHeaderListSize,
+                    DynamicTableSizeLimit = (int)dynTableSizeLimit,
                 },
                 new Hpack.Encoder.Options
                 {
@@ -192,9 +199,6 @@ namespace Http2
                     HuffmanStrategy = options.HuffmanStrategy,
                 }
             );
-
-            // Clamp the dynamic table size limit to int range
-            var dynTableSizeLimit = Math.Min(localSettings.HeaderTableSize, int.MaxValue);
 
             headerReader = new HeaderReader(
                 new Hpack.Decoder(new Hpack.Decoder.Options

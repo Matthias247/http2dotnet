@@ -24,6 +24,7 @@ namespace Http2
         {
             public int MaxFrameSize;
             public int MaxHeaderListSize;
+            public int DynamicTableSizeLimit;
         }
 
         private struct StreamData
@@ -1130,22 +1131,26 @@ namespace Http2
             // remoteSettings.MaxHeaderListSize is currently not used
 
             // Update the maximum HPACK table size
-            if (this.hEncoder.DynamicTableSize <= remoteSettings.HeaderTableSize)
+            var newRequestedTableSize = (int)remoteSettings.HeaderTableSize;
+            if (newRequestedTableSize > this.hEncoder.DynamicTableSize)
             {
-                // We can just keep the current setting
+                // We could theoretically just keep the current setting.
                 // There's no need to use a bigger setting, it's just an
                 // option that is granted to us from the remote.
-                // TODO: If the peer lowers the header table size through the
-                // else branch it will never be able to increase it again,
-                // since we don't have a setting anywhere on how big the table
-                // size should be growable.
+                // We will even not want to go to an arbitrary settings, since
+                // this means the remote can trigger us into using an infinite
+                // amount of memory.
+                // As a compromise increase the header table size up to a
+                // configured limit.
+                this.hEncoder.DynamicTableSize =
+                    Math.Min(newRequestedTableSize, options.DynamicTableSizeLimit);
             }
             else
             {
                 // We need to lower our header table size.
                 // The next header block that we encode will contain a
                 // notification about it.
-                this.hEncoder.DynamicTableSize = (int)remoteSettings.HeaderTableSize;
+                this.hEncoder.DynamicTableSize = newRequestedTableSize;
             }
 
             // Update all streams windows
