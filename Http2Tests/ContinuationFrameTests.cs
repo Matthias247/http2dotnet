@@ -103,6 +103,171 @@ namespace Http2Tests
         }
 
         [Theory]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(3)]
+        [InlineData(17)]
+        [InlineData(18)]
+        public async Task ContinuationsWherePartsDontContainFullHeaderMustBeSupported(
+            int nrContinuations)
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            IStream stream = null;
+            IEnumerable<HeaderField> receivedHeaders = null;
+            SemaphoreSlim handlerDone = new SemaphoreSlim(0);
+
+            Func<IStream, bool> listener = (s) =>
+            {
+                stream = s;
+                Task.Run(async () =>
+                {
+                    receivedHeaders = await s.ReadHeadersAsync();
+                    handlerDone.Release();
+                });
+                return true;
+            };
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                true, inPipe, outPipe, loggerProvider, listener);
+
+            var hEncoder = new Encoder();
+            // Construct a proper set of header here, where a single headerfield could
+            // by splitted over more than 1 fragment
+            var totalHeaders = ServerStreamTests.DefaultGetHeaders.TakeWhile(
+                h => h.Name.StartsWith(":"));
+            totalHeaders = totalHeaders.Append(
+                new HeaderField { Name = "longname", Value = "longvalue" });
+            totalHeaders = totalHeaders.Append(
+                new HeaderField { Name = "abc", Value = "xyz" });
+
+            // Encode all headers in a single header block
+            var hBuf = new byte[32*1024];
+            var encodeRes =
+                hEncoder.EncodeInto(new ArraySegment<byte>(hBuf), totalHeaders);
+            Assert.Equal(totalHeaders.Count(), encodeRes.FieldCount);
+            Assert.True(
+                encodeRes.UsedBytes >= 5,
+                "Test must encode headers with at least 5 bytes to work properly");
+
+            // Write the first 3 bytes in a header frame
+            // These cover all pseudoheaders, which wouldn't be affected by
+            // possible bugs anyway
+            var fh = new FrameHeader
+            {
+                Type = FrameType.Headers,
+                Length = 3,
+                StreamId = 1u,
+                Flags = (byte)0,
+            };
+            await inPipe.WriteFrameHeader(fh);
+            await inPipe.WriteAsync(new ArraySegment<byte>(hBuf, 0, 3));
+
+            var offset = 3;
+            var length = encodeRes.UsedBytes - 3;
+
+            for (var i = 0; i < nrContinuations; i++)
+            {
+                var isLast = i == nrContinuations - 1;
+                var dataLength = isLast ? length : 1;
+                fh = new FrameHeader
+                {
+                    Type = FrameType.Continuation,
+                    Length = dataLength,
+                    StreamId = 1u,
+                    Flags = (byte)(isLast ? ContinuationFrameFlags.EndOfHeaders : 0),
+                };
+                await inPipe.WriteFrameHeader(fh);
+                await inPipe.WriteAsync(new ArraySegment<byte>(hBuf, offset, dataLength));
+                offset += dataLength;
+                length -= dataLength;
+            }
+
+            var handlerCompleted = await handlerDone.WaitAsync(
+                ReadableStreamTestExtensions.ReadTimeout);
+            Assert.True(handlerCompleted, "Expected stream handler to complete");
+            Assert.True(
+                totalHeaders.SequenceEqual(receivedHeaders),
+                "Expected to receive all sent headers");
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(1)]
+        [InlineData(2)]
+        public async Task IncompleteHeaderBlocksShouldBeDetected(
+            int nrContinuations)
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+
+            Func<IStream, bool> listener = (s) => true;
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                true, inPipe, outPipe, loggerProvider, listener);
+
+            var hEncoder = new Encoder();
+            // Construct a proper set of header here, where a single headerfield could
+            // by splitted over more than 1 fragment
+            var totalHeaders = ServerStreamTests.DefaultGetHeaders.TakeWhile(
+                h => h.Name.StartsWith(":"));
+            totalHeaders = totalHeaders.Append(
+                new HeaderField { Name = "longname", Value = "longvalue" });
+            totalHeaders = totalHeaders.Append(
+                new HeaderField { Name = "abc", Value = "xyz" });
+
+            // Encode all headers in a single header block
+            var hBuf = new byte[32*1024];
+            var encodeRes =
+                hEncoder.EncodeInto(new ArraySegment<byte>(hBuf), totalHeaders);
+            Assert.Equal(totalHeaders.Count(), encodeRes.FieldCount);
+            Assert.True(
+                encodeRes.UsedBytes >= 5,
+                "Test must encode headers with at least 5 bytes to work properly");
+
+            // Write header data in multiple parts
+            // The last part will miss one byte
+            var offset = 0;
+            var length = encodeRes.UsedBytes;
+
+            var isLast = nrContinuations == 0;
+            var dataLength = isLast ? (length - 1) : 3;
+            var fh = new FrameHeader
+            {
+                Type = FrameType.Headers,
+                Length = dataLength,
+                StreamId = 1u,
+                Flags = (byte)(isLast ? HeadersFrameFlags.EndOfHeaders : 0),
+            };
+            await inPipe.WriteFrameHeader(fh);
+            await inPipe.WriteAsync(new ArraySegment<byte>(hBuf, offset, dataLength));
+
+            offset += dataLength;
+            length -= dataLength;
+
+            for (var i = 0; i < nrContinuations; i++)
+            {
+                isLast = i == nrContinuations - 1;
+                dataLength = isLast ? (length - 1) : 1;
+                fh = new FrameHeader
+                {
+                    Type = FrameType.Continuation,
+                    Length = dataLength,
+                    StreamId = 1u,
+                    Flags = (byte)(isLast ? ContinuationFrameFlags.EndOfHeaders : 0),
+                };
+                await inPipe.WriteFrameHeader(fh);
+                await inPipe.WriteAsync(new ArraySegment<byte>(hBuf, offset, dataLength));
+                offset += dataLength;
+                length -= dataLength;
+            }
+
+            Assert.True(1 == length, "Expected to send all but 1 byte");
+
+            // Expect a GoAway as reaction to incomplete headers
+            await outPipe.AssertGoAwayReception(ErrorCode.CompressionError, 0u);
+            await outPipe.AssertStreamEnd();
+        }
+
+        [Theory]
         [InlineData(16384, 8000, 1, 1)]      // No continuation required
         [InlineData(16384, 16384, 1, 1)]     // No continuation required
         [InlineData(16384, 100*1024, 7, 7)]  // Continuations required
@@ -300,6 +465,8 @@ namespace Http2Tests
 
             if (shouldError)
             {
+                // TODO: The spec says actually the remote should answer with
+                // an HTTP431 error - but that happens on another layer
                 await outPipe.AssertGoAwayReception(ErrorCode.ProtocolError, 0u);
                 await outPipe.AssertStreamEnd();
             }

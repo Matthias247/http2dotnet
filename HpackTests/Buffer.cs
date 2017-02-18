@@ -38,6 +38,14 @@ namespace HpackTests
             }
         }
 
+        public void RemoveFront(int amount)
+        {
+            for (var i = 0; i < amount; i++)
+            {
+                bytes.RemoveAt(0);
+            }
+        }
+
         public int Length
         {
             get { return bytes.Count; }

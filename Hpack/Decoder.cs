@@ -6,7 +6,7 @@ namespace Http2.Hpack
     /// <summary>
     /// HPACK decoder
     /// </summary>
-    public class Decoder
+    public class Decoder : IDisposable
     {
         /// <summary>
         /// Options for creating an HPACK decoder
@@ -60,6 +60,12 @@ namespace Http2.Hpack
         /// member and it's length in the HeaderSize member.
         /// </summary>
         public bool Done = true;
+
+        /// <summary>
+        /// Controls whether decoding a table update is valid at the next Decode
+        /// call. This should be set to true at the beginning of each header block.
+        /// </summary>
+        public bool AllowTableSizeUpdates = true;
 
         /// <summary>
         /// Returns whether the HPACK decoder is on the initial state, where it
@@ -161,6 +167,12 @@ namespace Http2.Hpack
             this._headerTable = new HeaderTable(dynamicTableSize);
         }
 
+        public void Dispose()
+        {
+            _stringDecoder.Dispose();
+            _stringDecoder = null;
+        }
+
         /// <summary>
         /// Resets the internal state for processing of the next header field
         /// </summary>
@@ -183,6 +195,7 @@ namespace Http2.Hpack
             // No need to check for validity here
             // The getAt function will already throw if the index is not valid
 
+            AllowTableSizeUpdates = false;
             Done = true;
             HeaderField = new HeaderField
             {
@@ -212,6 +225,7 @@ namespace Http2.Hpack
 
             this.Reset(); // Reset decoder state
 
+            AllowTableSizeUpdates = false;
             Done = true;
             HeaderField = new HeaderField
             {
@@ -241,6 +255,7 @@ namespace Http2.Hpack
 
             this.Reset(); // Reset decoder state
 
+            AllowTableSizeUpdates = false;
             Done = true;
             HeaderField = new HeaderField
             {
@@ -400,6 +415,11 @@ namespace Http2.Hpack
             else if ((startByte & 0xE0) == 0x20)
             {
                 // Table size update
+                // This is only valid at the beginning of a header block
+                if (!AllowTableSizeUpdates)
+                {
+                    throw new Exception("Table update is not allowed");
+                }
                 this._tasks[0].Type = TaskType.StartReadInt;
                 this._tasks[0].IntData = 5; // 5bit prefix
                 this._tasks[1].Type = TaskType.HandleTableUpdate;
@@ -613,21 +633,6 @@ namespace Http2.Hpack
                         }
                         headers.Add(decoder.HeaderField);
                     }
-                    else
-                    {
-                        // This can happen if the last element of the header block
-                        // is a TableUpdate instruction. In other cases this is invalid
-                        if (length != 0)
-                        {
-                            return new DecodeFragmentResult
-                            {
-                                Status = DecodeStatus.IncompleteHeaderBlockFragment,
-                                HeaderFieldsSize = headersSize,
-                            };
-                        }
-                        // Decoding is complete - length is 0
-                        break;
-                    }
                 }
             }
             catch (Exception)
@@ -637,16 +642,6 @@ namespace Http2.Hpack
                 return new DecodeFragmentResult
                 {
                     Status = DecodeStatus.InvalidHeaderBlockFragment,
-                    HeaderFieldsSize = headersSize,
-                };
-            }
-
-            // Check if the HeaderBlockFragment has correctly ended
-            if (!decoder.HasInitialState)
-            {
-                return new DecodeFragmentResult
-                {
-                    Status = DecodeStatus.IncompleteHeaderBlockFragment,
                     HeaderFieldsSize = headersSize,
                 };
             }

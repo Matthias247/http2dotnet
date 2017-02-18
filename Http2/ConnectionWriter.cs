@@ -307,7 +307,9 @@ namespace Http2
                     canSend = Math.Min(canSend, options.MaxFrameSize);
                     // If flow control window is empty check the next stream
                     // However empty data frames can be sent without a window
-                    if (canSend == 0 && first.Data.Count != 0) continue;
+                    // TODO: Check if it's allowed to send 0 byte data frames
+                    // in case of a negative flow control window.
+                    if (canSend <= 0 && first.Data.Count != 0) continue;
 
                     // Adjust the flow control windows by what we are able to write
                     var toSend = Math.Min(canSend, first.Data.Count);
@@ -1088,8 +1090,8 @@ namespace Http2
                 if (streamId == 0)
                 {
                     // Check for overflow
-                    var maxIncrease = int.MaxValue - connFlowWindow;
-                    if (amount > maxIncrease)
+                    var updatedValue = (long)connFlowWindow + (long)amount;
+                    if (updatedValue > (long)int.MaxValue)
                     {
                         return new Http2Error
                         {
@@ -1105,10 +1107,10 @@ namespace Http2
                         Connection.logger.LogTrace(
                             "Outgoing flow control window update:\n" +
                             "  Connection window: {0} -> {1}",
-                            connFlowWindow, connFlowWindow + amount);
+                            connFlowWindow, (int)updatedValue);
                     }
                     if (connFlowWindow == 0) wakeup = true;
-                    connFlowWindow += amount;
+                    connFlowWindow = (int)updatedValue;
                 }
                 else
                 {
@@ -1118,8 +1120,8 @@ namespace Http2
                         {
                             var s = Streams[i];
                             // Check for overflow
-                            var maxIncrease = int.MaxValue - s.Window;
-                            if (amount > maxIncrease)
+                            var updatedValue = (long)s.Window + (long)amount;
+                            if (updatedValue > (long)int.MaxValue)
                             {
                                 return new Http2Error
                                 {
@@ -1135,13 +1137,71 @@ namespace Http2
                                 Connection.logger.LogTrace(
                                     "Outgoing flow control window update:\n" +
                                     "  Stream {0} window: {1} -> {2}",
-                                    streamId, s.Window, s.Window + amount);
+                                    streamId, s.Window, (int)updatedValue);
                             }
-                            if (s.Window == 0 && s.WriteQueue.Count > 0) wakeup = true;
-                            s.Window += amount;
+                            s.Window = (int)updatedValue;
                             Streams[i] = s;
+                            if (s.Window > 0 && s.WriteQueue.Count > 0)
+                            {
+                                wakeup = true;
+                            }
                             break;
                         }
+                    }
+                }
+            }
+
+            if (wakeup)
+            {
+                this.wakeupWriter.Set();
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Updates the flow control window of all streams by the given stream by amount.
+        /// The amount can be negative.
+        /// </summary>
+        /// <returns>
+        /// Returns an error if at least one flow control window over- or underflows
+        /// during this operation.
+        /// </returns>
+        public Http2Error? UpdateAllStreamWindows(int amount)
+        {
+            var wakeup = false;
+
+            lock (mutex)
+            {
+                // Iterate over all streams and apply window update
+                for (var i = 0; i < Streams.Count; i++)
+                {
+                    var s = Streams[i];
+                    // Check for overflow and underflow
+                    var updatedValue = (long)s.Window + (long)amount;
+                    if (updatedValue > (long)int.MaxValue ||
+                        updatedValue < (long)int.MinValue)
+                    {
+                        return new Http2Error
+                        {
+                            Code = ErrorCode.FlowControlError,
+                            StreamId = s.StreamId,
+                            Message = "Flow control window overflow",
+                        };
+                    }
+
+                    if (Connection.logger != null &&
+                        Connection.logger.IsEnabled(LogLevel.Trace))
+                    {
+                        Connection.logger.LogTrace(
+                            "Outgoing flow control window update:\n" +
+                            "  Stream {0} window: {1} -> {2}",
+                            s.StreamId, s.Window, s.Window + amount);
+                    }
+                    s.Window += amount;
+                    Streams[i] = s;
+                    if (s.Window > 0 && s.WriteQueue.Count > 0)
+                    {
+                        wakeup = true;
                     }
                 }
             }

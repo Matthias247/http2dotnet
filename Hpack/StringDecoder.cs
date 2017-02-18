@@ -7,7 +7,7 @@ namespace Http2.Hpack
     /// <summary>
     /// Decodes string values according to the HPACK specification.
     /// </summary>
-    public class StringDecoder
+    public class StringDecoder : IDisposable
     {
         private enum State: byte
         {
@@ -53,10 +53,27 @@ namespace Http2.Hpack
             this._maxLength = maxLength;
         }
 
+        public void Dispose()
+        {
+            if (_stringBuffer != null)
+            {
+                _pool.Return(_stringBuffer);
+                _stringBuffer = null;
+            }
+        }
+
         public int Decode(ArraySegment<byte> buf)
         {
             var offset = buf.Offset;
             var length = buf.Count;
+
+            // Check if there's a leftover string from the last decode process.
+            // Should normally not happen.
+            if (_stringBuffer != null)
+            {
+                _pool.Return(_stringBuffer);
+                _stringBuffer = null;
+            }
 
             var bt = buf.Array[offset];
             this._huffman = (bt & 0x80) == 0x80;

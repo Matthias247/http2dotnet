@@ -34,24 +34,65 @@ namespace HpackTests
             Assert.Equal(decoded[0], '-');
             Assert.Equal(decoded[1], '.');
             Assert.Equal(decoded[2], '\\');
+
+            buffer = new Buffer();
+            buffer.WriteByte(0x86); // AB = 100001 1011101 = 1000 0110 1110 1
+            buffer.WriteByte(0xEF);
+            decoded = Huffman.Decode(buffer.View);
+            Assert.Equal(decoded.Length, 2);
+            Assert.Equal(decoded[0], 'A');
+            Assert.Equal(decoded[1], 'B');
         }
 
-        [Fact]
-        public void ShouldThrowErrorIfEOSSymbolIsEncountered()
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void ShouldThrowErrorIfEOSSymbolIsEncountered(bool fillLastByte)
         {
             var buffer = new Buffer();
             buffer.WriteByte(0xf8); // '&'
             buffer.WriteByte(0xff);
             buffer.WriteByte(0xff);
             buffer.WriteByte(0xff);
-            buffer.WriteByte(0xfc);
+            byte lastByte = fillLastByte ? (byte)0xff : (byte)0xfc; // Both contain EOS
+            buffer.WriteByte(lastByte);
             var ex = Assert.Throws<Exception>(() => {
                 Huffman.Decode(buffer.View);
             });
             Assert.Equal(ex.Message, "Encountered EOS in huffman code");
         }
 
-        // A seperate test case that uses an invalid huffman code does not make sense, because
-        // the first invalid huffman code is EOS, and that case is captured
+        [Fact]
+        public void ShouldThrowErrorIfPaddingIsZero()
+        {
+            var buffer = new Buffer();
+            buffer.WriteByte(0x86); // AB = 100001 1011101 = 1000 0110 1110 1
+            buffer.WriteByte(0xE8);
+            var ex = Assert.Throws<Exception>(() => {
+                Huffman.Decode(buffer.View);
+            });
+            Assert.Equal("Invalid padding", ex.Message);
+        }
+
+        [Fact]
+        public void ShouldThrowErrorIfPaddingIsLongerThanNecessary()
+        {
+            var buffer = new Buffer();
+            buffer.WriteByte(0x86); // AB = 100001 1011101 = 1000 0110 1110 1
+            buffer.WriteByte(0xEF);
+            buffer.WriteByte(0xFF); // Extra padding
+            var ex = Assert.Throws<Exception>(() => {
+                Huffman.Decode(buffer.View);
+            });
+            Assert.Equal("Padding exceeds 7 bits", ex.Message);
+
+            buffer = new Buffer();
+            buffer.WriteByte(0xFA); // ',' = 0xFA
+            buffer.WriteByte(0xFF); // Padding
+            ex = Assert.Throws<Exception>(() => {
+                Huffman.Decode(buffer.View);
+            });
+            Assert.Equal("Padding exceeds 7 bits", ex.Message);
+        }
     }
 }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Http2.Hpack;
+using static Http2.Hpack.DecoderExtensions;
 
 namespace Http2
 {
@@ -21,7 +22,7 @@ namespace Http2
     /// Reads and decodes a sequence of HEADERS and CONTINUATION frames into
     /// complete decoded header lists.
     /// </summary>
-    public class HeaderReader
+    public class HeaderReader : IDisposable
     {
         /// <summary>
         /// Stores the result of a ReadHeaders operation
@@ -56,6 +57,33 @@ namespace Http2
 
             if (buffer == null || buffer.Length < maxFrameSize)
                 throw new ArgumentException(nameof(buffer));
+        }
+
+        public void Dispose()
+        {
+            hpackDecoder.Dispose();
+        }
+
+        /// <summary>
+        /// Transforms the result of an HPACK decode operation into a possible
+        /// error code.
+        /// </summary>
+        private static Http2Error? DecodeResultToError(DecodeFragmentResult res)
+        {
+            if (res.Status != DecodeStatus.Success)
+            {
+                var errc =
+                    (res.Status == DecodeStatus.MaxHeaderListSizeExceeded)
+                    ? ErrorCode.ProtocolError
+                    : ErrorCode.CompressionError;
+                return new Http2Error
+                {
+                    StreamId = 0,
+                    Code = errc,
+                    Message = res.Status.ToString(),
+                };
+            }
+            return null;
         }
 
         /// <summary>
@@ -145,23 +173,21 @@ namespace Http2
                 };
             }
 
+            // Allow table updates at the start of header header block
+            // This will be reset once the first header was decoded and will
+            // persist also during the continuation frame
+            hpackDecoder.AllowTableSizeUpdates = true;
+
             // Decode headers from the first header block
             var decodeResult = hpackDecoder.DecodeHeaderBlockFragment(
                 new ArraySegment<byte>(buffer, offset, contentLen),
                 allowedHeadersSize,
                 headers);
 
-            if (decodeResult.Status != DecoderExtensions.DecodeStatus.Success)
+            var err = DecodeResultToError(decodeResult);
+            if (err != null)
             {
-                return new Result
-                {
-                    Error = new Http2Error
-                    {
-                        StreamId = 0,
-                        Code = ErrorCode.ProtocolError,
-                        Message = decodeResult.Status.ToString(),
-                    },
-                };
+                return new Result { Error = err };
             }
 
             allowedHeadersSize -= decodeResult.HeaderFieldsSize;
@@ -200,26 +226,34 @@ namespace Http2
                 offset = 0;
                 contentLen = contHeader.Length;
 
-                // Decode headers from the first header block
+                // Decode headers from continuation fragment
                 decodeResult = hpackDecoder.DecodeHeaderBlockFragment(
                     new ArraySegment<byte>(buffer, offset, contentLen),
                     allowedHeadersSize,
                     headers);
 
-                if (decodeResult.Status != DecoderExtensions.DecodeStatus.Success)
+                var err2 = DecodeResultToError(decodeResult);
+                if (err2 != null)
                 {
-                    return new Result
-                    {
-                        Error = new Http2Error
-                        {
-                            StreamId = 0,
-                            Code = ErrorCode.ProtocolError,
-                            Message = decodeResult.Status.ToString(),
-                        },
-                    };
+                    return new Result { Error = err2 };
                 }
 
                 allowedHeadersSize -= decodeResult.HeaderFieldsSize;
+            }
+
+            // Check if decoder is initial state, which means a complete header
+            // block was received
+            if (!hpackDecoder.HasInitialState)
+            {
+                return new Result
+                {
+                    Error = new Http2Error
+                    {
+                        Code = ErrorCode.CompressionError,
+                        StreamId = 0u,
+                        Message = "Received incomplete header block",
+                    },
+                };
             }
 
             return new Result

@@ -8,6 +8,20 @@ namespace Http2.Hpack
     {
         private static ArrayPool<byte> _pool = ArrayPool<byte>.Shared;
 
+        /// <summary>
+        /// Resizes a buffer by allocating a new one and copying usedBytes from
+        /// the old to the new buffer.
+        /// </summary>
+        private static void ResizeBuffer(
+            ref byte[] outBuf, int usedBytes, int newBytes)
+        {
+            var newSize = outBuf.Length + newBytes;
+            var newBuf = _pool.Rent(newSize);
+            Array.Copy(outBuf, 0, newBuf, 0, usedBytes);
+            _pool.Return(outBuf);
+            outBuf = newBuf;
+        }
+
         public static string Decode(ArraySegment<byte> input)
         {
             var byteCount = 0;
@@ -20,16 +34,9 @@ namespace Http2.Hpack
             var inputByteOffset = 0;
             var inputBitOffset = 0;
 
-            // Function for resizing the output buffer when necessary
-            Action resizeOutBuf = () => {
-                // All bytes are occupied, need to resize to accomodate more
-                var leftBytes = input.Count - inputByteOffset;
-                var newSize = outBuf.Length + leftBytes * 2;
-                var newBuf = _pool.Rent(newSize);
-                Array.Copy(outBuf, 0, newBuf, 0, byteCount);
-                _pool.Return(outBuf);
-                outBuf = newBuf;
-            };
+            var currentSymbolLength = 0;
+            // Padding is only valid in case all bits are 1's
+            var isValidPadding = true;
 
             var treeNode = HuffmanTree.Root;
 
@@ -40,8 +47,18 @@ namespace Http2.Hpack
                     // Fetch bit at offset position
                     var bit = (bt & (1 << inputBitOffset)) >> inputBitOffset;
                     // Follow the tree branch that is specified by that bit
-                    if (bit != 0) treeNode = treeNode.Child1;
-                    else treeNode = treeNode.Child0;
+                    if (bit != 0)
+                    {
+                        treeNode = treeNode.Child1;
+                    }
+                    else
+                    {
+                        // Encountered a 0 bit
+                        treeNode = treeNode.Child0;
+                        isValidPadding = false;
+                    }
+                    currentSymbolLength++;
+
                     if (treeNode == null)
                     {
                         _pool.Return(outBuf);
@@ -55,11 +72,15 @@ namespace Http2.Hpack
                             // We are at the leaf and got a value
                             if (outBuf.Length - byteCount == 0)
                             {
-                                resizeOutBuf();
+                                // No more space - resize first
+                                var unprocessedBytes = input.Count - inputByteOffset;
+                                ResizeBuffer(ref outBuf, byteCount, 2*unprocessedBytes);
                             }
                             outBuf[byteCount] = (byte)treeNode.Value;
                             byteCount++;
                             treeNode = HuffmanTree.Root;
+                            currentSymbolLength = 0;
+                            isValidPadding = true;
                         }
                         else
                         {
@@ -70,9 +91,20 @@ namespace Http2.Hpack
                             throw new Exception("Encountered EOS in huffman code");
                         }
                     }
-                    // TODO: A padding strictly longer
-                    // than 7 bits MUST be treated as a decoding error.
+                    
                 }
+            }
+
+            if (currentSymbolLength > 7)
+            {
+                // A padding strictly longer
+                // than 7 bits MUST be treated as a decoding error.
+                throw new Exception("Padding exceeds 7 bits");
+            }
+
+            if (!isValidPadding)
+            {
+                throw new Exception("Invalid padding");
             }
 
             // Convert the buffer into a string

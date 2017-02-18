@@ -50,6 +50,9 @@ namespace Http2
         private AsyncManualResetEvent readHeadersPossible = new AsyncManualResetEvent(false);
         private AsyncManualResetEvent readTrailersPossible = new AsyncManualResetEvent(false);
 
+        private long declaredInContentLength = -1;
+        private long totalInData = 0;
+
         private int receiveWindow; // Might be superficial since that info is also in RingBuf size
         private RingBuf recvBuf;
 
@@ -84,7 +87,7 @@ namespace Http2
                 // EndOfHeaders will be auto-set
                 Flags = endOfStream ? (byte)HeadersFrameFlags.EndOfStream : (byte)0,
             };
-            var res = await connection.Writer.WriteHeaders(fhh, headers);
+            var res = await connection.writer.WriteHeaders(fhh, headers);
             if (res != ConnectionWriter.WriteResult.Success)
             {
                 // TODO: Improve the exception
@@ -289,13 +292,13 @@ namespace Http2
                 {
                     ErrorCode = errorCode
                 };
-                writeResetTask = connection.Writer.WriteResetStream(fh, resetData);
+                writeResetTask = connection.writer.WriteResetStream(fh, resetData);
             }
             else
             {
                 // If we don't send a notification we still have to unregister
                 // from the writer in order to cancel pending writes
-                connection.Writer.RemoveStream(this.Id);
+                connection.writer.RemoveStream(this.Id);
             }
 
             // Unregister from the connection
@@ -350,6 +353,15 @@ namespace Http2
                             {
                                 windowUpdateAmount = possibleWindowUpdate;
                                 receiveWindow += windowUpdateAmount;
+
+                                if (connection.logger != null &&
+                                    connection.logger.IsEnabled(LogLevel.Trace))
+                                {
+                                    connection.logger.LogTrace(
+                                        "Incoming flow control window update:\n" +
+                                        "  Stream {0} window: {1} -> {2}",
+                                        Id, receiveWindow - windowUpdateAmount, receiveWindow);
+                                }
                             }
                         }
 
@@ -417,7 +429,7 @@ namespace Http2
 
             try
             {
-                await this.connection.Writer.WriteWindowUpdate(fh, updateData);
+                await this.connection.writer.WriteWindowUpdate(fh, updateData);
             }
             catch (Exception)
             {
@@ -489,7 +501,7 @@ namespace Http2
                     Flags = endOfStream ? ((byte)DataFrameFlags.EndOfStream) : (byte)0,
                 };
 
-                var res = await connection.Writer.WriteData(fh, buffer);
+                var res = await connection.writer.WriteData(fh, buffer);
                 if (res == ConnectionWriter.WriteResult.StreamResetError)
                 {
                     throw new StreamResetException();
@@ -615,6 +627,8 @@ namespace Http2
                             }
                             headersReceived = true;
                             wakeupHeaderWaiter = true;
+                            // TODO: Uncompress cookie headers here?
+                            declaredInContentLength = headers.Headers.GetContentLength();
                             inHeaders = headers.Headers;
                         }
                         else if (!dataReceived)
@@ -653,6 +667,21 @@ namespace Http2
                                     Message = "Received invalid trailers",
                                 };
                             }
+
+                            // If content-length was set we must also validate
+                            // it against the received dataamount here
+                            if (declaredInContentLength >= 0 &&
+                                declaredInContentLength != totalInData)
+                            {
+                                return new Http2Error
+                                {
+                                    StreamId = Id,
+                                    Code = ErrorCode.ProtocolError,
+                                    Message =
+                                        "Length of DATA frames does not match content-length",
+                                };
+                            }
+
                             wakeupTrailerWaiter = true;
                             inTrailers = headers.Headers;
                         }
@@ -723,12 +752,19 @@ namespace Http2
             return null;
         }
 
+        /// <summary>Result of the ProcessData operation</summary>
+        public class ProcessDataResult
+        {
+            public Http2Error? Error;
+            public int DataSize;
+        }
+
         /// <summary>
         /// Processes the reception of a DATA frame.
         /// The connection is responsible for checking the maximum frame length
         /// before calling this function.
         /// </summary>
-        public async ValueTask<Http2Error?> ProcessData(
+        public async ValueTask<ProcessDataResult> ProcessData(
             FrameHeader dataHeader,
             IReadableByteStream inputStream,
             byte[] tempBuf)
@@ -754,11 +790,15 @@ namespace Http2
 
                 if (length < 0)
                 {
-                    return new Http2Error
+                    return new ProcessDataResult
                     {
-                        StreamId = 0, // This is a connection error
-                        Code = ErrorCode.ProtocolError,
-                        Message = "Frame is too small after substracting padding",
+                        DataSize = 0,
+                        Error = new Http2Error
+                        {
+                            StreamId = 0, // This is a connection error
+                            Code = ErrorCode.ProtocolError,
+                            Message = "Frame is too small after substracting padding",
+                        }
                     };
                 }
             }
@@ -788,27 +828,68 @@ namespace Http2
                             // State Open can also mean we only have sent
                             // headers but not received them.
                             // Therefore checking the state alone isn't sufficient.
-                            return new Http2Error
+                            return new ProcessDataResult
                             {
-                                StreamId = Id,
-                                Code = ErrorCode.ProtocolError,
-                                Message = "Received data before headers",
+                                DataSize = length,
+                                Error = new Http2Error
+                                {
+                                    StreamId = Id,
+                                    Code = ErrorCode.ProtocolError,
+                                    Message = "Received data before headers",
+                                }
                             };
                         }
+
                         // Check if the flow control window is exceeded
                         if (length > receiveWindow)
                         {
-                            return new Http2Error
+                            return new ProcessDataResult
                             {
-                                StreamId = Id,
-                                Code = ErrorCode.FlowControlError,
-                                Message = "Received window exceeded",
+                                DataSize = length,
+                                Error = new Http2Error
+                                {
+                                    StreamId = Id,
+                                    Code = ErrorCode.FlowControlError,
+                                    Message = "Received window exceeded",
+                                }
                             };
                         }
+                        if (connection.logger != null &&
+                            connection.logger.IsEnabled(LogLevel.Trace))
+                        {
+                            connection.logger.LogTrace(
+                                "Incoming flow control window update:\n" +
+                                "  Stream {0} window: {1} -> {2}",
+                                Id, receiveWindow, receiveWindow - length);
+                        }
                         receiveWindow -= length;
+
                         // Copy the data
                         recvBuf.Write(contentSegment);
                         dataReceived = true;
+
+                        // Check if data matches declared content-length
+                        // TODO: What should be done if the declared
+                        // content-length was invalid (-2)?
+                        totalInData += length;
+                        if (dataHeader.HasEndOfStreamFlag &&
+                            declaredInContentLength >= 0 &&
+                            declaredInContentLength != totalInData)
+                        {
+                            return new ProcessDataResult
+                            {
+                                DataSize = length,
+                                Error = new Http2Error
+                                {
+                                    StreamId = Id,
+                                    Code = ErrorCode.ProtocolError,
+                                    Message =
+                                        "Length of DATA frames does not match content-length",
+                                }
+                            };
+                        }
+
+                        // All checks OK so far, wakeup waiter and handle state changes
                         wakeupDataWaiter = true;
                         // Handle state changes that are caused by DATA frames
                         if (dataHeader.HasEndOfStreamFlag)
@@ -831,11 +912,15 @@ namespace Http2
                         // Received a DATA frame for a stream that was
                         // already closed or not properly opened from remote side.
                         // That's not valid
-                        return new Http2Error
+                        return new ProcessDataResult
                         {
-                            StreamId = Id,
-                            Code = ErrorCode.StreamClosed,
-                            Message = "Received data for closed stream",
+                            DataSize = length,
+                            Error = new Http2Error
+                            {
+                                StreamId = Id,
+                                Code = ErrorCode.StreamClosed,
+                                Message = "Received data for closed stream",
+                            }
                         };
                     case StreamState.Reset:
                         // The stream was already reset
@@ -866,7 +951,11 @@ namespace Http2
                 connection.UnregisterStream(this);
             }
 
-            return null;
+            return new ProcessDataResult
+            {
+                DataSize = length,
+                Error = null,
+            };
         }
     }
 }

@@ -67,6 +67,9 @@ namespace Http2
             public object Mutex;
             public bool Closed;
             public Dictionary<uint, StreamImpl> streamMap;
+            /// The last and maximum stream ID that was sent to the remote.
+            /// 0 means we never sent anything
+            public uint LastOutgoingStreamId;
             /// The last and maximum stream ID that was received from the remote.
             /// 0 means we never received anything
             public uint LastIncomingStreamId;
@@ -97,20 +100,16 @@ namespace Http2
         /// <summary>Flow control window for the connection</summary>
         private int connReceiveFlowWindow = Constants.InitialConnectionWindowSize;
 
-        /// The last and maximum stream ID that was sent to the remote.
-        /// 0 means we never sent anything
-        uint lastOutgoingStreamId = 0;
-
         private readonly Func<IStream, bool> StreamListener;
         internal readonly ILogger logger;
 
-        internal readonly ConnectionWriter Writer;
-        internal readonly IReadableByteStream InputStream;
+        internal readonly ConnectionWriter writer;
+        internal readonly IReadableByteStream inputStream;
         private readonly Task readerDone;
 
-        private readonly HeaderReader HeaderReader;
-        internal readonly Settings LocalSettings;
-        internal Settings RemoteSettings = Settings.Default;
+        private readonly HeaderReader headerReader;
+        internal readonly Settings localSettings;
+        internal Settings remoteSettings = Settings.Default;
 
         private TaskCompletionSource<GoAwayReason> remoteGoAwayTcs =
             new TaskCompletionSource<GoAwayReason>();
@@ -150,17 +149,17 @@ namespace Http2
             logger = options.Logger;
 
             if (!options.Settings.Valid) throw new ArgumentException(nameof(options.Settings));
-            LocalSettings = options.Settings;
+            localSettings = options.Settings;
             // Disable server push as it's not supported.
             // Disabling it here is easier than wanting a custom config from the
             // user which disables it.
-            LocalSettings.EnablePush = false;
+            localSettings.EnablePush = false;
             // TODO: If the remote settings are not the default ones we will
             // also need to validate those
 
             if (options.InputStream == null) throw new ArgumentNullException(nameof(options.InputStream));
             if (options.OutputStream == null) throw new ArgumentNullException(nameof(options.OutputStream));
-            this.InputStream = options.InputStream;
+            this.inputStream = options.InputStream;
 
             if (options.IsServer && options.StreamListener == null)
                 throw new ArgumentNullException(nameof(options.StreamListener));
@@ -168,35 +167,36 @@ namespace Http2
 
             // Allocate a receive buffer from the pool
             receiveBuffer = _pool.Rent(
-                (int)LocalSettings.MaxFrameSize + FrameHeader.HeaderSize);
+                (int)localSettings.MaxFrameSize + FrameHeader.HeaderSize);
 
             // Initialize shared data
             shared.Mutex = new object();
             shared.streamMap = new Dictionary<uint, StreamImpl>();
+            shared.LastOutgoingStreamId = 0u;
             shared.LastIncomingStreamId = 0u;
             shared.GoAwaySent = false;
             shared.Closed = false;
             shared.PingState = null;
 
             // Start the writing task
-            Writer = new ConnectionWriter(
+            writer = new ConnectionWriter(
                 this, options.OutputStream,
                 new ConnectionWriter.Options
                 {
-                    MaxFrameSize = (int)RemoteSettings.MaxFrameSize,
-                    MaxHeaderListSize = (int)RemoteSettings.MaxHeaderListSize,
+                    MaxFrameSize = (int)remoteSettings.MaxFrameSize,
+                    MaxHeaderListSize = (int)remoteSettings.MaxHeaderListSize,
                 },
                 new Hpack.Encoder.Options
                 {
-                    DynamicTableSize = (int)RemoteSettings.HeaderTableSize,
+                    DynamicTableSize = (int)remoteSettings.HeaderTableSize,
                     HuffmanStrategy = options.HuffmanStrategy,
                 }
             );
 
             // Clamp the dynamic table size limit to int range
-            var dynTableSizeLimit = Math.Min(LocalSettings.HeaderTableSize, int.MaxValue);
+            var dynTableSizeLimit = Math.Min(localSettings.HeaderTableSize, int.MaxValue);
 
-            HeaderReader = new HeaderReader(
+            headerReader = new HeaderReader(
                 new Hpack.Decoder(new Hpack.Decoder.Options
                 {
                     // Remark: The dynamic table size is set to the default
@@ -206,8 +206,8 @@ namespace Http2
                     // at start
                     DynamicTableSizeLimit = (int)dynTableSizeLimit,
                 }),
-                LocalSettings.MaxFrameSize,
-                LocalSettings.MaxHeaderListSize,
+                localSettings.MaxFrameSize,
+                localSettings.MaxHeaderListSize,
                 receiveBuffer,
                 options.InputStream,
                 logger
@@ -232,9 +232,9 @@ namespace Http2
                 // On the client side the preface will still be written before
                 // these settings, since it's handled by the ConnectionWriter.
                 var encodedSettingsBuf = new ArraySegment<byte>(
-                    receiveBuffer, 0, LocalSettings.RequiredSize);
-                LocalSettings.EncodeInto(encodedSettingsBuf);
-                await this.Writer.WriteSettings(new FrameHeader{
+                    receiveBuffer, 0, localSettings.RequiredSize);
+                localSettings.EncodeInto(encodedSettingsBuf);
+                await writer.WriteSettings(new FrameHeader{
                     Type = FrameType.Settings,
                     StreamId = 0,
                     Flags = 0,
@@ -247,7 +247,7 @@ namespace Http2
                 if (IsServer)
                 {
                     // TODO: Make the timeout configureable
-                    await ClientPreface.ReadAsync(InputStream, ClientPrefaceTimeout);
+                    await ClientPreface.ReadAsync(inputStream, ClientPrefaceTimeout);
                     if (logger != null && logger.IsEnabled(LogLevel.Trace))
                     {
                         logger.LogTrace("rcvd ClientPreface");
@@ -326,7 +326,7 @@ namespace Http2
                                 // If the write fails the connection will get
                                 // closed and we will get the error reported on
                                 // the next read attempt.
-                                await Writer.WriteResetStream(fh, resetData);
+                                await writer.WriteResetStream(fh, resetData);
                             }
                         }
                     }
@@ -350,10 +350,10 @@ namespace Http2
             // necessary.
             // Attempts to double-close the outgoing stream will be caugt and
             // avoid by the Writer, so calling this is always safe.
-            await Writer.CloseNow();
+            await writer.CloseNow();
 
             // Wait until the Writer has been fully shut down.
-            await Writer.Done;
+            await writer.Done;
 
             // Cleanup all streams that are still open
             Dictionary<uint, StreamImpl> activeStreams = null;
@@ -413,6 +413,9 @@ namespace Http2
             _pool.Return(receiveBuffer);
             receiveBuffer = null;
 
+            // Dispose the hpack decoder
+            headerReader.Dispose();
+
             // Once we got here the connection is fully closed and the Done
             // task will be fulfilled.
         }
@@ -430,7 +433,7 @@ namespace Http2
         {
             // Start by closing the writer, which will get the connection close
             // process (first writer, then reader) into progress.
-            await Writer.CloseNow();
+            await writer.CloseNow();
 
             // And wait for the reader to be done
             await readerDone;
@@ -522,7 +525,7 @@ namespace Http2
             };
 
             var pingBuffer = BitConverter.GetBytes(pingId);
-            var writePingResult = await Writer.WritePing(
+            var writePingResult = await writer.WritePing(
                 fh, new ArraySegment<byte>(pingBuffer));
 
             // Remark: There's no need to handle writePingResult
@@ -559,7 +562,7 @@ namespace Http2
                 // In this case a force close will be applied.
                 if (closeWriter)
                 {
-                    await Writer.CloseNow();
+                    await writer.CloseNow();
                 }
             }
             else
@@ -581,13 +584,13 @@ namespace Http2
                     },
                 };
 
-                await Writer.WriteGoAway(fh, goAwayData, closeWriter);
+                await writer.WriteGoAway(fh, goAwayData, closeWriter);
             }
         }
 
         private async ValueTask<Http2Error?> ReadOneFrame()
         {
-            var fh = await FrameHeader.ReceiveAsync(InputStream, receiveBuffer);
+            var fh = await FrameHeader.ReceiveAsync(inputStream, receiveBuffer);
             if (logger != null && logger.IsEnabled(LogLevel.Trace))
             {
                 logger.LogTrace("recv " + FramePrinter.PrintFrameHeader(fh));
@@ -636,7 +639,7 @@ namespace Http2
                     return await HandleDataFrame(fh);
                 case FrameType.Headers:
                     // Use the header reader to get all headers combined
-                    var headerRes = await HeaderReader.ReadHeaders(fh);
+                    var headerRes = await headerReader.ReadHeaders(fh);
                     if (headerRes.Error != null) return headerRes.Error;
                     return await HandleHeaders(headerRes.HeaderData);
                 default:
@@ -658,16 +661,27 @@ namespace Http2
             }
 
             StreamImpl stream = null;
-            uint lastStreamId = 0;
+            uint lastOutgoingStream = 0u;
+            uint lastIncomingStream = 0u;
             lock (shared.Mutex)
             {
-                lastStreamId = shared.LastIncomingStreamId;
+                lastIncomingStream = shared.LastIncomingStreamId;
+                lastOutgoingStream = shared.LastOutgoingStreamId;
                 shared.streamMap.TryGetValue(headers.StreamId, out stream);
             }
 
             if (stream != null)
             {
                 //Delegate processing of the HEADERS frame to the existing stream
+                if (headers.Priority.HasValue)
+                {
+                    var handlePrioErr = HandlePriorityData(
+                        headers.StreamId, headers.Priority.Value);
+                    if (handlePrioErr != null)
+                    {
+                        return handlePrioErr;
+                    }
+                }
                 return stream.ProcessHeaders(headers);
             }
 
@@ -679,7 +693,7 @@ namespace Http2
             var isValidNewStream =
                 IsServer && // As a client don't accept HEADERS as a way to create a new stream
                 isRemoteInitiated &&
-                (headers.StreamId > lastStreamId);
+                (headers.StreamId > lastIncomingStream);
 
             // Remark:
             // The HEADERS might also be trailers for a stream which has existed
@@ -701,7 +715,7 @@ namespace Http2
                 return new Http2Error
                 {
                     StreamId = headers.StreamId,
-                    Code = ErrorCode.RefusedStream,
+                    Code = ErrorCode.StreamClosed,
                     Message = "Refusing HEADERS which don't open a new stream",
                 };
             }
@@ -721,7 +735,7 @@ namespace Http2
                 }
 
                 // Check max concurrent streams
-                if (shared.streamMap.Count + 1 > LocalSettings.MaxConcurrentStreams)
+                if (shared.streamMap.Count + 1 > localSettings.MaxConcurrentStreams)
                 {
                     // Return an error which will trigger a reset frame for
                     // the new stream
@@ -742,7 +756,7 @@ namespace Http2
             // Create a new stream for that ID
             var newStream = new StreamImpl(
                 this, headers.StreamId, StreamState.Idle,
-                (int)LocalSettings.InitialWindowSize);
+                (int)localSettings.InitialWindowSize);
 
             // Add the stream to our map
             // The map might have changed between the check in this
@@ -754,7 +768,7 @@ namespace Http2
             }
 
             // Register that stream at the writer
-            if (!Writer.RegisterStream(headers.StreamId, (int)RemoteSettings.InitialWindowSize))
+            if (!writer.RegisterStream(headers.StreamId, (int)remoteSettings.InitialWindowSize))
             {
                 // We can't register the stream at the writer
                 // This can happen if the writer is already closed
@@ -778,6 +792,19 @@ namespace Http2
                 // the connection. No need to pass that dead stream up to
                 // the user
                 return err;
+            }
+
+            // Apply the priority settings if received
+            // TODO: This might also be moved into StreamImpl.ProcessHeaders
+            if (headers.Priority.HasValue)
+            {
+                err = HandlePriorityData(
+                    headers.StreamId,
+                    headers.Priority.Value);
+                if (err != null)
+                {
+                    return err;
+                }
             }
 
             var handledByUser = StreamListener(newStream);
@@ -813,7 +840,7 @@ namespace Http2
                     Message = "Frame is too small to contain padding",
                 };
             }
-            if (fh.Length > LocalSettings.MaxFrameSize)
+            if (fh.Length > localSettings.MaxFrameSize)
             {
                 return new Http2Error
                 {
@@ -823,56 +850,47 @@ namespace Http2
                 };
             }
 
-            // Check if the data frame exceeds the flow control window for the
-            // connection
-            // TODO: This is wrong. We need to check for the size without PADDING!
-            // However we don't know the padding here yet.
-            if (fh.Length > connReceiveFlowWindow)
-            {
-                return new Http2Error
-                {
-                    StreamId = 0,
-                    Code = ErrorCode.FlowControlError,
-                    Message = "Received window exceeded",
-                };
-            }
-            // Decrement the flow control window of the connection
-            connReceiveFlowWindow -= fh.Length;
-
             StreamImpl stream = null;
+            uint lastIncomingStreamId;
+            uint lastOutgoingStreamId;
             lock (shared.Mutex)
             {
+                lastIncomingStreamId = shared.LastIncomingStreamId;
+                lastOutgoingStreamId = shared.LastOutgoingStreamId;
                 shared.streamMap.TryGetValue(fh.StreamId, out stream);
             }
 
             Http2Error? processError = null;
+            int realDataSize = fh.Length;
 
             if (stream != null)
             {
                 //Delegate processing of the DATA frame to the stream
-                processError = await stream.ProcessData(fh, InputStream, receiveBuffer);
+                var procResult = await stream.ProcessData(fh, inputStream, receiveBuffer);
+                processError = procResult.Error;
+                realDataSize = procResult.DataSize;
             }
             else
             {
                 // The stream for which we received data does not exist :O
                 // Maybe because we have reset it.
                 // In this case we still need to read the data.
-                // It might also have never been established at all.
-                // But we can only roughly check that
-                // TODO: Check if the StreamId is bigger then the maximum
-                // received or sent one - potentially send a reset frame
+                // The stream might also have never been established at all.
+                // This can't be exactly checked, since it's not tracked which
+                // streams were alive.
 
                 // Consume the data by reading it into our receiveBuffer
-                await InputStream.ReadAll(
+                await inputStream.ReadAll(
                     new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
 
                 // Check the most necessary things, e.g. if size is valid wrt padding
+                // and what is the real data size (necessary for window update).
                 if ((fh.Flags & (byte)DataFrameFlags.Padded) != 0)
                 {
                     // Access is safe. Length 1 is checked before
                     var padLen = receiveBuffer[0];
-                    var contentSize = fh.Length - 1 - padLen;
-                    if (contentSize < 0)
+                    realDataSize = fh.Length - 1 - padLen;
+                    if (realDataSize < 0)
                     {
                         return new Http2Error
                         {
@@ -883,8 +901,17 @@ namespace Http2
                     }
                 }
 
-                // TODO: Send a reset stream in this case?
-                // processError = new Http2Error()...
+                // Issue a stream error with error type StreamClosed if the
+                // streamId could be a valid one.
+                // Otherwise use a connection error.
+                var isIdleStreamId = IsIdleStreamId(
+                    fh.StreamId, lastOutgoingStreamId, lastIncomingStreamId);
+                processError = new Http2Error
+                {
+                    StreamId = isIdleStreamId ? 0u : fh.StreamId,
+                    Code = ErrorCode.StreamClosed,
+                    Message = "Received DATA for an unknown frame",
+                };
             }
 
             // Check if we should send a window update for the connection
@@ -895,6 +922,34 @@ namespace Http2
                 return processError;
             }
 
+            // Check if the data frame exceeds the flow control window for the
+            // connection.
+            // This yields a possible connection error, therefore this would
+            // overwrite an already happened stream error (that is irrelevant if
+            // the connection gets closed).
+            // This check executes AFTER the data has already been read.
+            // However that most likely won't hurt as, as the critical checks
+            // are for violations of the maximum frame size and the stream window.
+            if (realDataSize > connReceiveFlowWindow)
+            {
+                return new Http2Error
+                {
+                    StreamId = 0,
+                    Code = ErrorCode.FlowControlError,
+                    Message = "Received window exceeded",
+                };
+            }
+            // Decrement the flow control window of the connection
+            connReceiveFlowWindow -= realDataSize;
+            if (logger != null && logger.IsEnabled(LogLevel.Trace))
+            {
+                logger.LogTrace(
+                    "Incoming flow control window update:\n" +
+                    "  Connection window: {0} -> {1}\n",
+                    connReceiveFlowWindow + realDataSize,
+                    connReceiveFlowWindow);
+            }
+
             var maxWindow = Constants.InitialConnectionWindowSize;
             var possibleWindowUpdate = maxWindow - connReceiveFlowWindow;
             var windowUpdateAmount = 0;
@@ -902,6 +957,14 @@ namespace Http2
             {
                 windowUpdateAmount = possibleWindowUpdate;
                 connReceiveFlowWindow += windowUpdateAmount;
+                if (logger != null && logger.IsEnabled(LogLevel.Trace))
+                {
+                    logger.LogTrace(
+                        "Incoming flow control window update:\n" +
+                        "  Connection window: {0} -> {1}\n",
+                        connReceiveFlowWindow - windowUpdateAmount,
+                        connReceiveFlowWindow);
+                }
             }
 
             if (windowUpdateAmount > 0)
@@ -920,7 +983,7 @@ namespace Http2
 
                 try
                 {
-                    await Writer.WriteWindowUpdate(wfh, updateData);
+                    await writer.WriteWindowUpdate(wfh, updateData);
                 }
                 catch (Exception)
                 {
@@ -957,7 +1020,7 @@ namespace Http2
         private async ValueTask<Http2Error?> HandleUnknownFrame(FrameHeader fh)
         {
             // Check frame size
-            if (fh.Length > LocalSettings.MaxFrameSize)
+            if (fh.Length > localSettings.MaxFrameSize)
             {
                 return new Http2Error
                 {
@@ -968,7 +1031,7 @@ namespace Http2
             }
 
             // Read data from the unknown frame into the receive buffer
-            await InputStream.ReadAll(
+            await inputStream.ReadAll(
                 new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
 
             // And discard it
@@ -987,7 +1050,7 @@ namespace Http2
                     Message = "Received invalid GOAWAY frame header",
                 };
             }
-            if (fh.Length > LocalSettings.MaxFrameSize)
+            if (fh.Length > localSettings.MaxFrameSize)
             {
                 return new Http2Error
                 {
@@ -998,7 +1061,7 @@ namespace Http2
             }
 
             // Read data
-            await InputStream.ReadAll(new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
+            await inputStream.ReadAll(new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
 
             // Deserialize it
             var goAwayData = GoAwayFrameData.DecodeFrom(
@@ -1037,7 +1100,8 @@ namespace Http2
             }
 
             // Read data
-            await InputStream.ReadAll(new ArraySegment<byte>(receiveBuffer, 0, ResetFrameData.Size));
+            await inputStream.ReadAll(
+                new ArraySegment<byte>(receiveBuffer, 0, ResetFrameData.Size));
 
             // Deserialize it
             var resetData = ResetFrameData.DecodeFrom(
@@ -1045,8 +1109,12 @@ namespace Http2
 
             // Handle the reset
             StreamImpl stream = null;
+            uint lastOutgoingStream = 0u;
+            uint lastIncomingStream = 0u;
             lock (shared.Mutex)
             {
+                lastIncomingStream = shared.LastIncomingStreamId;
+                lastOutgoingStream = shared.LastOutgoingStreamId;
                 shared.streamMap.TryGetValue(fh.StreamId, out stream);
                 if (stream != null)
                 {
@@ -1058,7 +1126,35 @@ namespace Http2
             {
                 await stream.Reset(resetData.ErrorCode, true);
             }
+            else
+            {
+                // Check if the reset frame was sent on an IDLE stream
+                // In this case stream will always be null, as IDLE streams cant
+                // be in the map
+                if (IsIdleStreamId(fh.StreamId, lastOutgoingStream, lastIncomingStream))
+                {
+                    return new Http2Error
+                    {
+                        StreamId = 0u,
+                        Code = ErrorCode.ProtocolError,
+                        Message = "Received RST_STREAM for an IDLE stream",
+                    };
+                }
+            }
+
             return null;
+        }
+
+        private bool IsIdleStreamId(
+            uint streamId, uint lastOutgoingStreamId, uint lastIncomingStreamId)
+        {
+            var isServerInitiated = streamId % 2 == 0;
+            var isRemoteInitiated =
+                (IsServer && !isServerInitiated) ||
+                (!IsServer && isServerInitiated);
+            var isIdle = (isRemoteInitiated && streamId > lastIncomingStreamId ||
+                          !isRemoteInitiated && streamId > lastOutgoingStreamId);
+            return isIdle;
         }
 
         private async ValueTask<Http2Error?> HandleWindowUpdateFrame(FrameHeader fh)
@@ -1074,14 +1170,37 @@ namespace Http2
             }
 
             // Read data
-            await InputStream.ReadAll(new ArraySegment<byte>(receiveBuffer, 0, WindowUpdateData.Size));
+            await inputStream.ReadAll(
+                new ArraySegment<byte>(receiveBuffer, 0, WindowUpdateData.Size));
 
             // Deserialize it
             var windowUpdateData = WindowUpdateData.DecodeFrom(
                 new ArraySegment<byte>(receiveBuffer, 0, WindowUpdateData.Size));
 
+            // Check if the window update is sent on an idle stream
+            bool isIdleStream = false;
+            lock (shared.Mutex)
+            {
+                isIdleStream = IsIdleStreamId(
+                    fh.StreamId, shared.LastOutgoingStreamId, shared.LastIncomingStreamId);
+            }
+
+            // If we receive a window update for an idle stream it's a connection
+            // error. This is mainly here to satisfy the h2spec test suite.
+            // The protocol would work fine without it by ignoring the update.
+            if (isIdleStream)
+            {
+                return new Http2Error
+                {
+                    StreamId = 0u,
+                    Code = ErrorCode.ProtocolError,
+                    Message = "Received window update for Idle stream",
+                };
+            }
+
             // Handle it - 0 size increments will be handled by the writer
-            return Writer.UpdateFlowControlWindow(fh.StreamId, windowUpdateData.WindowSizeIncrement);
+            return writer.UpdateFlowControlWindow(
+                fh.StreamId, windowUpdateData.WindowSizeIncrement);
         }
 
         private async ValueTask<Http2Error?> HandlePingFrame(FrameHeader fh)
@@ -1099,7 +1218,7 @@ namespace Http2
             }
 
             // Read ping data
-            await InputStream.ReadAll(new ArraySegment<byte>(receiveBuffer, 0, 8));
+            await inputStream.ReadAll(new ArraySegment<byte>(receiveBuffer, 0, 8));
 
             var hasAck = (fh.Flags & (byte)PingFrameFlags.Ack) != 0;
             if (hasAck)
@@ -1128,7 +1247,7 @@ namespace Http2
                 // Respond to the ping
                 var pongHeader = fh;
                 pongHeader.Flags = (byte)PingFrameFlags.Ack;
-                await Writer.WritePing(
+                await writer.WritePing(
                     pongHeader, new ArraySegment<byte>(receiveBuffer, 0, 8));
             }
 
@@ -1150,13 +1269,30 @@ namespace Http2
             }
 
             // Read frame data
-            await InputStream.ReadAll(new ArraySegment<byte>(receiveBuffer, 0, PriorityData.Size));
+            await inputStream.ReadAll(
+                new ArraySegment<byte>(receiveBuffer, 0, PriorityData.Size));
 
             // Decode the priority data
             // We don't reuse the same ArraySegment to avoid capturing it in the closure
             var prioData = PriorityData.DecodeFrom(
                 new ArraySegment<byte>(receiveBuffer, 0, PriorityData.Size));
-            // Do nothing with the priority data at the moment
+            
+            return HandlePriorityData(fh.StreamId, prioData);
+        }
+
+        private Http2Error? HandlePriorityData(
+            uint streamId, PriorityData data)
+        {
+            // Check if stream depends on itself
+            if (streamId == data.StreamDependency)
+            {
+                return new Http2Error
+                {
+                    Code = ErrorCode.ProtocolError,
+                    StreamId = streamId,
+                    Message = "Priority Error: A stream can not depend on itself",
+                };
+            }
 
             return null;
         }
@@ -1203,7 +1339,7 @@ namespace Http2
             {
                 // Received SETTINGS from the remote side
                 // Validate frame length before reading the body
-                if (fh.Length > LocalSettings.MaxFrameSize)
+                if (fh.Length > localSettings.MaxFrameSize)
                 {
                     return new Http2Error
                     {
@@ -1223,13 +1359,28 @@ namespace Http2
                 }
 
                 // Receive the body of the SETTINGs frame
-                await InputStream.ReadAll(
+                await inputStream.ReadAll(
                     new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
+
+                // Save the old initial window size for streams
+                // The maximum transitions are from int.MaxValue to 0
+                // and the other way around.
+                // This means the max delta is +/- int.MaxValue, which fits in int
+                var oldInitialStreamWindowSize = (int)remoteSettings.InitialWindowSize;
 
                 // Update the remote settings from that data
                 // This will also validate the settings
-                var err = RemoteSettings.UpdateFromData(
+                var err = remoteSettings.UpdateFromData(
                     new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
+                if (err != null)
+                {
+                    return err;
+                }
+
+                var deltaInitialStreamWindowSize =
+                    (int)remoteSettings.InitialWindowSize - oldInitialStreamWindowSize;
+                
+                err = writer.UpdateAllStreamWindows(deltaInitialStreamWindowSize);
                 if (err != null)
                 {
                     return err;
@@ -1238,7 +1389,7 @@ namespace Http2
                 // Update the writer with new values for the remote settings
                 // As with the current UpdateSettings API we don't see what has
                 // changed we need to overwrite everything.
-                Writer.UpdateSettings(RemoteSettings);
+                writer.UpdateSettings(remoteSettings);
 
                 // Set the settings received flag
                 settingsReceived = true;
@@ -1251,7 +1402,7 @@ namespace Http2
                     Length = 0,
                     StreamId = 0u,
                 };
-                await Writer.WriteSettings(
+                await writer.WriteSettings(
                     ackHeader, Constants.EmptyByteArray);
             }
 

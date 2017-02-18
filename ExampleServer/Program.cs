@@ -26,7 +26,8 @@ class Program
         return true;
     }
 
-    static byte[] responseBody = Encoding.ASCII.GetBytes("Hello World!");
+    static byte[] responseBody = Encoding.ASCII.GetBytes(
+        "<html><head>Hello World</head><body>Content</body></html>");
 
     static async void HandleIncomingStream(IStream stream)
     {
@@ -56,7 +57,7 @@ class Program
             };
             await stream.WriteHeadersAsync(responseHeaders, false);
             await stream.WriteAsync(new ArraySegment<byte>(
-                Encoding.ASCII.GetBytes("Hello World!")), true);
+                responseBody), true);
 
             // Request is fully handled here
         }
@@ -72,6 +73,7 @@ class Program
         var connectionId = 0;
 
         var settings = Settings.Default;
+        settings.MaxConcurrentStreams = 50;
 
         while (true)
         {
@@ -94,6 +96,14 @@ class Program
                 StreamListener = AcceptIncomingStream,
                 HuffmanStrategy = HuffmanStrategy.IfSmaller,
                 Logger = logProvider.CreateLogger("HTTP2Conn" + connectionId),
+            });
+
+            // Close the connection if we get a GoAway from the client
+            var remoteGoAwayTask = http2Con.RemoteGoAwayReason;
+            Task.Run(async () =>
+            {
+                await remoteGoAwayTask;
+                await http2Con.GoAwayAsync(ErrorCode.NoError, true);
             });
 
             connectionId++;

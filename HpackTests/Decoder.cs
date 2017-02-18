@@ -408,6 +408,41 @@ namespace HpackTests
         }
 
         [Fact]
+        public void ShouldHandleHeadersAfterMultipleTableSizeUpdates()
+        {
+            var decoder = new Decoder();
+
+            var buf = new Buffer();
+            buf.WriteByte(0x20); // Table update
+            buf.WriteByte(0x30); // Table update
+            buf.WriteByte(0x81); // Header frame
+            var consumed = decoder.Decode(buf.View);
+            Assert.True(decoder.Done);
+            Assert.Equal(":authority", decoder.HeaderField.Name);
+            Assert.Equal("", decoder.HeaderField.Value);
+            Assert.False(decoder.HeaderField.Sensitive);
+            Assert.Equal(42, decoder.HeaderSize);
+            Assert.Equal(3, consumed);
+            Assert.Equal(16, decoder.DynamicTableSize);
+            Assert.True(decoder.HasInitialState);
+        }
+
+        [Fact]
+        public void ShouldFailIfTableUpdateFollowsAfterHeader()
+        {
+            var decoder = new Decoder();
+            var buf = new Buffer();
+            buf.WriteByte(0x81); // Header frame
+            buf.WriteByte(0x20); // Table update
+            var consumed = decoder.Decode(buf.View);
+            Assert.True(decoder.Done);
+            Assert.Equal(":authority", decoder.HeaderField.Name);
+            Assert.Equal(1, consumed);
+            buf.RemoveFront(consumed);
+            var ex = Assert.Throws<Exception>(() => decoder.Decode(buf.View));
+        }
+
+        [Fact]
         public void ShouldThrowAnErrorIfTableSizeUpdateExceedsLimit()
         {
             var decoder = new Decoder();
@@ -572,7 +607,7 @@ namespace HpackTests
         }
 
         [Fact]
-        public void ShouldNotCrashWhenFullyIndexedDecodeIsContinuiedWith0Bytes()
+        public void ShouldNotCrashWhenFullyIndexedDecodeIsContinuedWith0Bytes()
         {
             // Need more entries in the dynamic table
             var decoder = new Decoder(new Decoder.Options {

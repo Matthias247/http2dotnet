@@ -7,7 +7,6 @@ using Xunit;
 using Xunit.Abstractions;
 
 using Http2;
-using Http2.Hpack;
 
 namespace Http2Tests
 {

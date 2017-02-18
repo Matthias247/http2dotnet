@@ -840,63 +840,6 @@ namespace Http2Tests
             Assert.Equal(StreamState.Reset, stream.State);
         }
 
-        [Fact]
-        public async Task SendingInvalidHeadersShouldTriggerAStreamReset()
-        {
-            var inPipe = new BufferedPipe(1024);
-            var outPipe = new BufferedPipe(1024);
-            var headers = new HeaderField[]
-            {
-                new HeaderField { Name = "method", Value = "GET" },
-                new HeaderField { Name = ":scheme", Value = "http" },
-                new HeaderField { Name = ":path", Value = "/" },
-            };
-
-            Func<IStream, bool> listener = (s) => true;
-            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
-                true, inPipe, outPipe, loggerProvider, listener);
-
-            var hEncoder = new Encoder();
-            await inPipe.WriteHeaders(hEncoder, 1, false, headers);
-            await outPipe.AssertResetStreamReception(1, ErrorCode.ProtocolError);
-        }
-
-        [Fact]
-        public async Task RespondingInvalidHeadersShouldTriggerAnException()
-        {
-            var inPipe = new BufferedPipe(1024);
-            var outPipe = new BufferedPipe(1024);
-
-            var r = await StreamCreator.CreateConnectionAndStream(
-                StreamState.Open, loggerProvider, inPipe, outPipe);
-
-            var headers = new HeaderField[]
-            {
-                new HeaderField { Name = "status", Value = "200" },
-            };
-            var ex = await Assert.ThrowsAsync<Exception>(async () =>
-                await r.stream.WriteHeadersAsync(headers, false));
-            Assert.Equal("ErrorInvalidPseudoHeader", ex.Message);
-        }
-
-        [Fact]
-        public async Task RespondingInvalidTrailersShouldTriggerAnException()
-        {
-            var inPipe = new BufferedPipe(1024);
-            var outPipe = new BufferedPipe(1024);
-
-            var r = await StreamCreator.CreateConnectionAndStream(
-                StreamState.Open, loggerProvider, inPipe, outPipe);
-
-            var headers = new HeaderField[]
-            {
-                new HeaderField { Name = ":asdf", Value = "200" },
-            };
-            var ex = await Assert.ThrowsAsync<Exception>(async () =>
-                await r.stream.WriteHeadersAsync(headers, false));
-            Assert.Equal("ErrorInvalidPseudoHeader", ex.Message);
-        }
-
         [Theory]
         [InlineData(true)]
         [InlineData(false)]
@@ -955,10 +898,7 @@ namespace Http2Tests
             {
                 await inPipe.WriteHeaders(res.hEncoder, 1, true, DefaultGetHeaders);
             }
-            var expectedErr =
-                streamState == StreamState.Closed
-                ? ErrorCode.RefusedStream
-                : ErrorCode.StreamClosed;
+            var expectedErr = ErrorCode.StreamClosed;
             await outPipe.AssertResetStreamReception(1u, expectedErr);
             var expectedState =
                 streamState == StreamState.Closed
@@ -972,7 +912,7 @@ namespace Http2Tests
         // [InlineData(false, true, false)] // TODO: SendingDataAloneCurrentlyDoesntReturnError
         [InlineData(false, false, true)]
         [InlineData(false, true, true)]
-        public async Task SendingHeadersOrDataOnAResetStreamShouldProduceARefusedStreamError(
+        public async Task SendingHeadersOrDataOnAResetStreamShouldProduceAClosedStreamError(
             bool sendHeaders, bool sendData, bool sendTrailers)
         {
             var inPipe = new BufferedPipe(1024);
@@ -1000,7 +940,7 @@ namespace Http2Tests
             {
                 await inPipe.WriteHeaders(r.hEncoder, 1, true, DefaultGetHeaders);
             }
-            await outPipe.AssertResetStreamReception(1, ErrorCode.RefusedStream);
+            await outPipe.AssertResetStreamReception(1, ErrorCode.StreamClosed);
         }
 
         [Theory]
@@ -1042,7 +982,7 @@ namespace Http2Tests
             // to be emitted. However as the implementation can not safely determine
             // if that stream ID was never used and valid we send and check for
             // a stream reset.
-            await outPipe.AssertResetStreamReception(31, ErrorCode.RefusedStream);
+            await outPipe.AssertResetStreamReception(31, ErrorCode.StreamClosed);
         }
 
         [Theory]
@@ -1060,7 +1000,7 @@ namespace Http2Tests
 
             var hEncoder = new Encoder();
             await inPipe.WriteHeaders(hEncoder, streamId, false, DefaultGetHeaders);
-            await outPipe.AssertResetStreamReception(streamId, ErrorCode.RefusedStream);
+            await outPipe.AssertResetStreamReception(streamId, ErrorCode.StreamClosed);
         }
 
         [Fact]
@@ -1142,6 +1082,62 @@ namespace Http2Tests
                     StreamState.Reset,
                     acceptedStreams[acceptedStreams.Count-2].State);
             }
+        }
+
+        [Theory]
+        [InlineData(1u)]
+        [InlineData(3u)]
+        [InlineData(5u)]
+        public async Task ADataFrameOnAnUnknownStreamIdShouldTriggerAStreamReset(
+            uint streamId)
+        {
+            // TODO: Do the same for clients
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+
+            Func<IStream, bool> listener = (s) => true;
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                true, inPipe, outPipe, loggerProvider, listener);
+
+            // Establish a high stream ID, which means all below are invalid
+            var hEncoder = new Encoder();
+            await inPipe.WriteHeaders(hEncoder, 111u, false, DefaultGetHeaders);
+
+            var fh = new FrameHeader
+            {
+                Type = FrameType.Data,
+                Length = 0,
+                Flags = 0,
+                StreamId = streamId,
+            };
+            await inPipe.WriteFrameHeader(fh);
+            await outPipe.AssertResetStreamReception(streamId, ErrorCode.StreamClosed);
+        }
+
+        [Theory]
+        [InlineData(1u)]
+        [InlineData(2u)]
+        [InlineData(3u)]
+        [InlineData(4u)]
+        public async Task ADataFrameOnAnIdleStreamIdShouldTriggerAGoAway(
+            uint streamId)
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+
+            Func<IStream, bool> listener = (s) => true;
+            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
+                true, inPipe, outPipe, loggerProvider, listener);
+
+            var fh = new FrameHeader
+            {
+                Type = FrameType.Data,
+                Length = 0,
+                Flags = 0,
+                StreamId = streamId,
+            };
+            await inPipe.WriteFrameHeader(fh);
+            await outPipe.AssertGoAwayReception(ErrorCode.StreamClosed, 0u);
         }
     }
 }
