@@ -391,6 +391,33 @@ namespace Http2Tests
         }
 
         [Fact]
+        public async Task ShouldGoAwayWhenStreamWindowIsOverflowedThroughSettingsUpdate()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+
+            var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe);
+
+            // Let the remote increase the flow control window of the stream
+            await inPipe.WriteWindowUpdate(
+                1u,
+                (int)(int.MaxValue - Settings.Default.InitialWindowSize));
+
+            // Should be still alive
+            await inPipe.WritePing(new byte[8], false);
+            await outPipe.ReadAndDiscardPong();
+
+            // And now write new settings which overflow the window
+            var newSettings = Settings.Default;
+            newSettings.InitialWindowSize++;
+            await inPipe.WriteSettings(newSettings);
+
+            // Dead through overflow
+            await outPipe.AssertGoAwayReception(ErrorCode.FlowControlError, 1u);
+        }
+
+        [Fact]
         public async Task ShouldAllowToSetTheMaxPossibleConnectionFlowControlWindowSize()
         {
             var inPipe = new BufferedPipe(1024);
