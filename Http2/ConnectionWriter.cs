@@ -75,6 +75,14 @@ namespace Http2
             public WriteResult Result;
         }
 
+        private class ChangeSettingsRequest
+        {
+            public Settings NewRemoteSettings;
+            public int InitialWindowSizeDelta;
+            public AsyncManualResetEvent Completed;
+            public Http2Error? Result;
+        }
+
         private static readonly ArrayPool<byte> _pool = ArrayPool<byte>.Shared;
 
         /// <summary>The associated connection</summary>
@@ -91,6 +99,12 @@ namespace Http2
         bool closeRequested = false;
         /// <summary>Whether CloseAsync() has already been called on the connection</summary>
         int closeConnectionIssued = 0;
+
+        /// <summary>
+        /// If this is not null the writer should apply the new settings and
+        /// send a settings ACK.
+        /// </summary>
+        ChangeSettingsRequest changeSettingsRequest = null;
 
         /// <summary>Outstanding writes the are associated to the connection</summary>
         Queue<WriteRequest> WriteQueue = new Queue<WriteRequest>();
@@ -154,15 +168,26 @@ namespace Http2
                     await this.wakeupWriter;
                     // Fetch the next task from shared information
                     WriteRequest writeRequest = null;
+                    ChangeSettingsRequest changeSettings = null;
                     bool doClose = false;
-                    int maxFrameSize = 0;
+
                     lock (this.mutex)
                     {
-                        writeRequest = GetNextReadyWriteRequest();
-                        // Copy the maximum frame size inside the lock to avoid races
-                        maxFrameSize = options.MaxFrameSize;
+                        // Do one of multiple possible actions
+                        // Prio 1: Apply new settings
+                        // Prio 2: Write a frame
+                        // Prio 3: Close the connection if requested
+                        if (changeSettingsRequest != null)
+                        {
+                            changeSettings = changeSettingsRequest;
+                            changeSettingsRequest = null;
+                        }
+                        else
+                        {
+                            writeRequest = GetNextReadyWriteRequest();
+                        }
                         // If there's nothing to write check if we should close the connection
-                        if (writeRequest == null)
+                        if (changeSettings == null && writeRequest == null)
                         {
                             if (this.closeRequested)
                             {
@@ -178,9 +203,23 @@ namespace Http2
                         }
                     }
 
-                    if (writeRequest != null)
+                    if (changeSettings != null)
                     {
-                        await ProcessWriteRequestAsync(writeRequest, maxFrameSize);
+                        var err = ApplyNewSettings(
+                            changeSettings.NewRemoteSettings,
+                            changeSettings.InitialWindowSizeDelta);
+                        if (err == null)
+                        {
+                            // TODO: Probably the ACK should be written in all
+                            // cases.
+                            await WriteSettingsAckAsync();
+                        }
+                        changeSettings.Result = err;
+                        changeSettings.Completed.Set();
+                    }
+                    else if (writeRequest != null)
+                    {
+                        await ProcessWriteRequestAsync(writeRequest);
                     }
                     else if (doClose)
                     {
@@ -211,6 +250,12 @@ namespace Http2
             lock (mutex)
             {
                 closeRequested = true;
+                // Complete a settings update that might still be enqueued
+                if (changeSettingsRequest != null)
+                {
+                    changeSettingsRequest.Completed.Set();
+                    changeSettingsRequest = null;
+                }
                 // Fail pending writes that are still queued up
                 FinishAllOutstandingWritesLocked();
             }
@@ -387,8 +432,7 @@ namespace Http2
             }
         }
 
-        private async Task ProcessWriteRequestAsync(
-            WriteRequest wr, int maxFrameSize)
+        private async Task ProcessWriteRequestAsync(WriteRequest wr)
         {
             // TODO: In general we SHOULD check whether the data payload exceeds the
             // maximum frame size. It is just copied at the moment
@@ -399,7 +443,7 @@ namespace Http2
                 switch (wr.Header.Type)
                 {
                     case FrameType.Headers:
-                        await WriteHeadersAsync(wr, maxFrameSize);
+                        await WriteHeadersAsync(wr);
                         break;
                     case FrameType.PushPromise:
                         await WritePushPromiseAsync(wr);
@@ -795,13 +839,30 @@ namespace Http2
         }
 
         /// <summary>
+        /// Writes a SETTINGS acknowledge frame
+        /// </summary>
+        private Task WriteSettingsAckAsync()
+        {
+            var fh = new FrameHeader
+            {
+                Type = FrameType.Settings,
+                StreamId = 0u,
+                Length = 0,
+                Flags = (byte)SettingsFrameFlags.Ack,
+            };
+            LogOutgoingFrameHeader(fh);
+            var headerView = new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize);
+            fh.EncodeInto(headerView);
+            return this.outStream.WriteAsync(headerView);
+        }
+
+        /// <summary>
         /// Writes a full header block.
         /// This will actually write a headers frame and possibly
         /// multiple continuation frames.
         /// This will not utilize the padding feature currently
         /// </summary>
-        private async Task WriteHeadersAsync(
-            WriteRequest wr, int maxFrameSize)
+        private async Task WriteHeadersAsync(WriteRequest wr)
         {
             // Limit the maximum frame size also to the limit of the output
             // buffer.
@@ -809,8 +870,8 @@ namespace Http2
             // try to write bigger frames, which would however need a bigger
             // output buffer. Instead of allowing this and reallocating the buffer
             // we keep the old buffer and use it's max size for headers.
-            maxFrameSize = Math.Min(
-                maxFrameSize,
+            var maxFrameSize = Math.Min(
+                options.MaxFrameSize,
                 outBuf.Length - FrameHeader.HeaderSize);
 
             var headerView = new ArraySegment<byte>(
@@ -1014,49 +1075,82 @@ namespace Http2
         }
 
         /// <summary>
-        /// Instruct the writer to user the new settings that the remote required.
+        /// Instruct the writer to utilize the new settings that the remote
+        /// required and to send a settings acknowledge frame.
         /// </summary>
-        public void UpdateSettings(Settings remoteSettings)
+        /// <returns>
+        /// Returns an error if updating the signal leaded to an invalid state.
+        /// </returns>
+        public async Task<Http2Error?> ApplyAndAckRemoteSettings(
+            Settings newRemoteSettings,
+            int initialWindowSizeDelta)
         {
-            // It doesn't really matter if the writer is already closed.
-            // We just set the value
+            ChangeSettingsRequest changeRequest = null;
+
             lock (mutex)
             {
-                // Update the maximum frame size
-                // Remark: The cast is valid, since the settings are validated before
-                // and the max MaxFrameSize fits into an integer.
-                // Remark 2: In order to send bigger HEADERS/CONTINUATION frames
-                // we would also need to update the size of the output buffer.
-                // This is not done here - instead the size of these frames
-                // will still be clamped to the max output buffer size in the
-                // respective routine. However the output buffer size might be
-                // bigger than the initally set maxFrameSize, as the pool allocator
-                // is able to return a bigger size. In that case the bigger size
-                // will be utilized up to maxFrameSize.
-                this.options.MaxFrameSize = (int)remoteSettings.MaxFrameSize;
+                // No need to apply settings when we are shutting down away
+                // There might be some frames left for sending, for which the
+                // new Settings can be used. But we should still be able to send
+                // them with the old settings, as we don't ACK the new settings.
+                if (closeRequested) return null;
 
-                // remoteSettings.MaxHeaderListSize is currently not used
-
-                // Update the maximum HPack table size
-                if (this.hEncoder.DynamicTableSize <= remoteSettings.HeaderTableSize)
+                changeRequest = new ChangeSettingsRequest
                 {
-                    // We can just keep the current setting
-                    // There's no need to use a bigger setting, it's just an
-                    // option that is granted to us from the remote.
-                }
-                else
-                {
-                    // We should lower our header table size and send a notification
-                    // about that. However this this currently not supported.
-                    // Additionally changing the size would cause a data race, as
-                    // it is concurrently used by the writer process.
-                    // We can continue the old settings and hope that the remote
-                    // won't reset the connection. This will only affect compatibility
-                    // with systems that use and enforce a header table size lower
-                    // than the default one.
-                    // TODO: Support also this case
-                }
+                    NewRemoteSettings = newRemoteSettings,
+                    InitialWindowSizeDelta = initialWindowSizeDelta,
+                    Completed = new AsyncManualResetEvent(false),
+                };
+                changeSettingsRequest = changeRequest;
             }
+
+            wakeupWriter.Set();
+
+            await changeRequest.Completed;
+            return changeRequest.Result;
+        }
+
+        private Http2Error? ApplyNewSettings(
+            Settings remoteSettings,
+            int initialWindowSizeDelta)
+        {
+            // Update the maximum frame size
+            // Remark: The cast is valid, since the settings are validated before
+            // and the max MaxFrameSize fits into an integer.
+            // Remark 2: In order to send bigger HEADERS/CONTINUATION frames
+            // we would also need to update the size of the output buffer.
+            // This is not done here - instead the size of these frames
+            // will still be clamped to the max output buffer size in the
+            // respective routine. However the output buffer size might be
+            // bigger than the initally set maxFrameSize, as the pool allocator
+            // is able to return a bigger size. In that case the bigger size
+            // will be utilized up to maxFrameSize.
+            this.options.MaxFrameSize = (int)remoteSettings.MaxFrameSize;
+
+            // remoteSettings.MaxHeaderListSize is currently not used
+
+            // Update the maximum HPack table size
+            if (this.hEncoder.DynamicTableSize <= remoteSettings.HeaderTableSize)
+            {
+                // We can just keep the current setting
+                // There's no need to use a bigger setting, it's just an
+                // option that is granted to us from the remote.
+            }
+            else
+            {
+                // We should lower our header table size and send a notification
+                // about that. However this this currently not supported.
+                // Additionally changing the size would cause a data race, as
+                // it is concurrently used by the writer process.
+                // We can continue the old settings and hope that the remote
+                // won't reset the connection. This will only affect compatibility
+                // with systems that use and enforce a header table size lower
+                // than the default one.
+                // TODO: Support also this case
+            }
+
+            // Update all streams windows
+            return UpdateAllStreamWindows(initialWindowSizeDelta);
         }
 
         /// <summary>
@@ -1166,51 +1260,55 @@ namespace Http2
         /// Returns an error if at least one flow control window over- or underflows
         /// during this operation.
         /// </returns>
-        public Http2Error? UpdateAllStreamWindows(int amount)
+        private Http2Error? UpdateAllStreamWindows(int amount)
         {
-            var wakeup = false;
+            bool hasOverflow = false;
 
-            lock (mutex)
+            // Iterate over all streams and apply window update
+            for (var i = 0; i < Streams.Count; i++)
             {
-                // Iterate over all streams and apply window update
-                for (var i = 0; i < Streams.Count; i++)
+                var s = Streams[i];
+                // Check for overflow and underflow
+                var updatedValue = (long)s.Window + (long)amount;
+                if (updatedValue > (long)int.MaxValue ||
+                    updatedValue < (long)int.MinValue)
                 {
-                    var s = Streams[i];
-                    // Check for overflow and underflow
-                    var updatedValue = (long)s.Window + (long)amount;
-                    if (updatedValue > (long)int.MaxValue ||
-                        updatedValue < (long)int.MinValue)
-                    {
-                        return new Http2Error
-                        {
-                            Code = ErrorCode.FlowControlError,
-                            StreamId = s.StreamId,
-                            Message = "Flow control window overflow",
-                        };
-                    }
-
-                    if (Connection.logger != null &&
-                        Connection.logger.IsEnabled(LogLevel.Trace))
-                    {
-                        Connection.logger.LogTrace(
-                            "Outgoing flow control window update:\n" +
-                            "  Stream {0} window: {1} -> {2}",
-                            s.StreamId, s.Window, s.Window + amount);
-                    }
-                    s.Window += amount;
-                    Streams[i] = s;
-                    if (s.Window > 0 && s.WriteQueue.Count > 0)
-                    {
-                        wakeup = true;
-                    }
+                    hasOverflow = true;
+                    break;
                 }
+
+                if (Connection.logger != null &&
+                    Connection.logger.IsEnabled(LogLevel.Trace))
+                {
+                    Connection.logger.LogTrace(
+                        "Outgoing flow control window update:\n" +
+                        "  Stream {0} window: {1} -> {2}",
+                        s.StreamId, s.Window, s.Window + amount);
+                }
+                s.Window += amount;
+                Streams[i] = s;
             }
 
-            if (wakeup)
+            if (hasOverflow)
             {
-                this.wakeupWriter.Set();
+                // We always signal a connection error if the flow control window
+                // overflows as the result of a SETTINGS update, since
+                // - that will not happen in normal environment (settings updates
+                //   happen early and not near the end of the window)
+                // - the update might overflow multiple stream windows at once,
+                //   which we can't signal and handle through the Http2Error
+                //   return value.
+                return new Http2Error
+                {
+                    Code = ErrorCode.FlowControlError,
+                    StreamId = 0u,
+                    Message = "Flow control window overflow through SETTINGS update",
+                };
             }
-            return null;
+            else
+            {
+                return null;
+            }
         }
     }
 }

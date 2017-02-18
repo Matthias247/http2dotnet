@@ -1377,33 +1377,24 @@ namespace Http2
                     return err;
                 }
 
+                // Calculate the delta in window size
+                // The output stream windows need to be adjusted by this value.
                 var deltaInitialStreamWindowSize =
                     (int)remoteSettings.InitialWindowSize - oldInitialStreamWindowSize;
-                
-                err = writer.UpdateAllStreamWindows(deltaInitialStreamWindowSize);
-                if (err != null)
-                {
-                    return err;
-                }
-
-                // Update the writer with new values for the remote settings
-                // As with the current UpdateSettings API we don't see what has
-                // changed we need to overwrite everything.
-                writer.UpdateSettings(remoteSettings);
 
                 // Set the settings received flag
                 settingsReceived = true;
 
-                // Send an acknowledge for the settings
-                var ackHeader = new FrameHeader
+                // Update the writer with new values for the remote settings and
+                // send an acknowledge.
+                // As with the current UpdateSettings API we don't see what has
+                // changed we need to overwrite everything.
+                err = await writer.ApplyAndAckRemoteSettings(
+                    remoteSettings, deltaInitialStreamWindowSize);
+                if (err != null)
                 {
-                    Type = FrameType.Settings,
-                    Flags = (byte)SettingsFrameFlags.Ack,
-                    Length = 0,
-                    StreamId = 0u,
-                };
-                await writer.WriteSettings(
-                    ackHeader, Constants.EmptyByteArray);
+                    return err;
+                }
             }
 
             return null;
