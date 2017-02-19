@@ -841,6 +841,12 @@ namespace Http2
                         }
 
                         // Check if the flow control window is exceeded
+                        // TODO: In case length == 0 we might omit some changes
+                        // E.g. in order to handle empty frames which close the
+                        // stream even in cases where the window is zero or even
+                        // negative. In the moment there is no problem, since the
+                        // lowest window is 0, and therefore 0 length data frames
+                        // are accepted.
                         if (length > receiveWindow)
                         {
                             return new ProcessDataResult

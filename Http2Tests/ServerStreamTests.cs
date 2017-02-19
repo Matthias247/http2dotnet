@@ -121,14 +121,7 @@ namespace Http2Tests
                 if (state == StreamState.HalfClosedRemote ||
                     state == StreamState.Closed)
                 {
-                    var fh = new FrameHeader
-                    {
-                        Type = FrameType.Data,
-                        Length = 0,
-                        StreamId = 1,
-                        Flags = (byte)DataFrameFlags.EndOfStream,
-                    };
-                    await iPipe.WriteFrameHeader(fh);
+                    await iPipe.WriteData(1u, 0, true);
                 }
 
                 var ok = await handlerDone.WaitAsync(
@@ -885,14 +878,7 @@ namespace Http2Tests
             }
             if (sendData)
             {
-                var fh = new FrameHeader
-                {
-                    Type = FrameType.Data,
-                    Length = 0,
-                    Flags = 0,
-                    StreamId = 1,
-                };
-                await inPipe.WriteFrameHeader(fh);
+                await inPipe.WriteData(1u, 0, false);
             }
             if (sendTrailers)
             {
@@ -927,14 +913,7 @@ namespace Http2Tests
             }
             if (sendData)
             {
-                var fh = new FrameHeader
-                {
-                    Type = FrameType.Data,
-                    Length = 0,
-                    Flags = 0,
-                    StreamId = 1,
-                };
-                await inPipe.WriteFrameHeader(fh);
+                await inPipe.WriteData(1u, 0, false);
             }
             if (sendTrailers)
             {
@@ -1103,14 +1082,7 @@ namespace Http2Tests
             var hEncoder = new Encoder();
             await inPipe.WriteHeaders(hEncoder, 111u, false, DefaultGetHeaders);
 
-            var fh = new FrameHeader
-            {
-                Type = FrameType.Data,
-                Length = 0,
-                Flags = 0,
-                StreamId = streamId,
-            };
-            await inPipe.WriteFrameHeader(fh);
+            await inPipe.WriteData(streamId, 0, false);
             await outPipe.AssertResetStreamReception(streamId, ErrorCode.StreamClosed);
         }
 
@@ -1129,14 +1101,7 @@ namespace Http2Tests
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
                 true, inPipe, outPipe, loggerProvider, listener);
 
-            var fh = new FrameHeader
-            {
-                Type = FrameType.Data,
-                Length = 0,
-                Flags = 0,
-                StreamId = streamId,
-            };
-            await inPipe.WriteFrameHeader(fh);
+            await inPipe.WriteData(streamId, 0, false);
             await outPipe.AssertGoAwayReception(ErrorCode.StreamClosed, 0u);
         }
     }

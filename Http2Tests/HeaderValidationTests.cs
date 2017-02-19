@@ -135,16 +135,7 @@ namespace Http2Tests
             for (var i = 0; i < dataLength.Length; i++)
             {
                 var isEos = i == (dataLength.Length - 1) && !useTrailers;
-                var data = new byte[dataLength[i]];
-                var fh = new FrameHeader
-                {
-                    Type = FrameType.Data,
-                    StreamId = 1u,
-                    Length = data.Length,
-                    Flags = (byte)(isEos ? DataFrameFlags.EndOfStream : 0),
-                };
-                await inPipe.WriteFrameHeader(fh);
-                await inPipe.WriteAsync(new ArraySegment<byte>(data));
+                await inPipe.WriteData(1u, dataLength[i], isEos);
             }
 
             if (useTrailers)

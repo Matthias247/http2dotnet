@@ -243,5 +243,28 @@ namespace Http2Tests
             await stream.WriteAsync(
                 new ArraySegment<byte>(outBuf, 0, result.UsedBytes));
         }
+
+        public static async Task WriteData(
+            this IWriteAndCloseableByteStream stream,
+            uint streamId,
+            int length,
+            bool endOfStream = false)
+        {
+            byte flags = 0;
+            if (endOfStream) flags |= (byte)DataFrameFlags.EndOfStream;
+            var fh = new FrameHeader
+            {
+                Type = FrameType.Data,
+                Length = length,
+                Flags = flags,
+                StreamId = streamId,
+            };
+            await stream.WriteFrameHeaderWithTimeout(fh);
+            if (length != 0)
+            {
+                await stream.WriteWithTimeout(
+                    new ArraySegment<byte>(new byte[length]));
+            }
+        }
     }
 }

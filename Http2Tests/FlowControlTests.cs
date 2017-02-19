@@ -76,17 +76,7 @@ namespace Http2Tests
             {
                 var toSend = dataLength[i];
                 var isEndOfStream = i == (dataLength.Length - 1);
-                var flags = isEndOfStream ? DataFrameFlags.EndOfStream : 0;
-                var fh = new FrameHeader
-                {
-                    Type = FrameType.Data,
-                    StreamId = 1,
-                    Flags = (byte)flags,
-                    Length = toSend,
-                };
-                await inPipe.WriteFrameHeaderWithTimeout(fh);
-                var fdata = new byte[toSend];
-                await inPipe.WriteWithTimeout(new ArraySegment<byte>(fdata));
+                await inPipe.WriteData(1u, toSend, isEndOfStream);
                 // Wait for a short amount of time between DATA frames
                 if (!isEndOfStream) await Task.Delay(5);
                 // Check if window updates were received if required
@@ -661,6 +651,31 @@ namespace Http2Tests
             }
 
             // Send a ping afterwards, which should be processed in all cases
+            await inPipe.WritePing(new byte[8], false);
+            await outPipe.ReadAndDiscardPong();
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task ReceivingEmptyDataFramesShouldBePossibleIfStreamWindowIsDrained(
+            bool emptyFrameIsEndOfStream)
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            var localSettings = Settings.Default;
+            localSettings.InitialWindowSize = 10;
+            var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe,
+                localSettings: localSettings);
+
+            // Consume the complete stream flow control window
+            await inPipe.WriteData(1u, 10, false);
+
+            // Send a 0byte data frame
+            await inPipe.WriteData(1u, 0, emptyFrameIsEndOfStream);
+
+            // Check if we are still alive
             await inPipe.WritePing(new byte[8], false);
             await outPipe.ReadAndDiscardPong();
         }
