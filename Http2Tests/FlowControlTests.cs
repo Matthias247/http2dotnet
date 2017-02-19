@@ -76,7 +76,7 @@ namespace Http2Tests
             {
                 var toSend = dataLength[i];
                 var isEndOfStream = i == (dataLength.Length - 1);
-                await inPipe.WriteData(1u, toSend, isEndOfStream);
+                await inPipe.WriteData(1u, toSend, endOfStream: isEndOfStream);
                 // Wait for a short amount of time between DATA frames
                 if (!isEndOfStream) await Task.Delay(5);
                 // Check if window updates were received if required
@@ -547,27 +547,12 @@ namespace Http2Tests
             await inPipe.WriteHeaders(
                 res.hEncoder, 555u, false, ServerStreamTests.DefaultGetHeaders);
 
-            // Write more data than the connection allows
-            var frameSize = dataAmount;
-            if (padLen.HasValue) frameSize += 1 + padLen.Value;
-
-            var fh = new FrameHeader
-            {
-                Type = FrameType.Data,
-                StreamId = streamId,
-                Flags = (byte)(padLen.HasValue ? DataFrameFlags.Padded : 0),
-                Length = frameSize,
-            };
-            await inPipe.WriteFrameHeaderWithTimeout(fh);
-
             // Try to send the data
             // This might fail, if the connection goes away before
             // everything is read
-            var data = new byte[frameSize];
-            if (padLen.HasValue) data[0] = (byte)padLen.Value;
             try
             {
-                await inPipe.WriteWithTimeout(new ArraySegment<byte>(data));
+                await inPipe.WriteData(streamId, dataAmount, padLen: padLen);
             }
             catch (Exception e)
             {
@@ -627,21 +612,7 @@ namespace Http2Tests
                 localSettings: settings);
 
             // Write more data than the stream allows
-            var frameSize = dataAmount;
-            if (padLen.HasValue) frameSize += 1 + padLen.Value;
-
-            var fh = new FrameHeader
-            {
-                Type = FrameType.Data,
-                StreamId = 1u,
-                Flags = (byte)(padLen.HasValue ? DataFrameFlags.Padded : 0),
-                Length = frameSize,
-            };
-            await inPipe.WriteFrameHeaderWithTimeout(fh);
-
-            var data = new byte[frameSize];
-            if (padLen.HasValue) data[0] = (byte)padLen.Value;
-            await inPipe.WriteWithTimeout(new ArraySegment<byte>(data));
+            await inPipe.WriteData(1u, dataAmount, padLen: padLen);
 
             if (isError)
             {
@@ -670,10 +641,10 @@ namespace Http2Tests
                 localSettings: localSettings);
 
             // Consume the complete stream flow control window
-            await inPipe.WriteData(1u, 10, false);
+            await inPipe.WriteData(1u, 10);
 
             // Send a 0byte data frame
-            await inPipe.WriteData(1u, 0, emptyFrameIsEndOfStream);
+            await inPipe.WriteData(1u, 0, endOfStream: emptyFrameIsEndOfStream);
 
             // Check if we are still alive
             await inPipe.WritePing(new byte[8], false);

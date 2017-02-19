@@ -135,7 +135,7 @@ namespace Http2Tests
             for (var i = 0; i < dataLength.Length; i++)
             {
                 var isEos = i == (dataLength.Length - 1) && !useTrailers;
-                await inPipe.WriteData(1u, dataLength[i], isEos);
+                await inPipe.WriteData(1u, dataLength[i], endOfStream: isEos);
             }
 
             if (useTrailers)

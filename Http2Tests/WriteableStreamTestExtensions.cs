@@ -131,7 +131,7 @@ namespace Http2Tests
             await stream.WriteFrameHeader(windowUpdateHeader);
             await stream.WriteAsync(new ArraySegment<byte>(dataBytes));
         }
-        
+
         public static async Task WriteResetStream(
             this IWriteAndCloseableByteStream stream, uint streamId, ErrorCode errc)
         {
@@ -248,22 +248,30 @@ namespace Http2Tests
             this IWriteAndCloseableByteStream stream,
             uint streamId,
             int length,
+            int? padLen = null,
             bool endOfStream = false)
         {
             byte flags = 0;
             if (endOfStream) flags |= (byte)DataFrameFlags.EndOfStream;
+            if (padLen.HasValue) flags |= (byte)DataFrameFlags.Padded;
+
+            var dataLen = length;
+            if (padLen.HasValue) dataLen += 1 + padLen.Value;
+            var data = new byte[dataLen];
+            if (padLen.HasValue) data[0] = (byte)padLen.Value;
+
             var fh = new FrameHeader
             {
                 Type = FrameType.Data,
-                Length = length,
+                Length = dataLen,
                 Flags = flags,
                 StreamId = streamId,
             };
-            await stream.WriteFrameHeaderWithTimeout(fh);
-            if (length != 0)
+            await stream.WriteFrameHeader(fh);
+
+            if (dataLen != 0)
             {
-                await stream.WriteWithTimeout(
-                    new ArraySegment<byte>(new byte[length]));
+                await stream.WriteWithTimeout(new ArraySegment<byte>(data));
             }
         }
     }

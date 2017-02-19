@@ -121,7 +121,7 @@ namespace Http2Tests
                 if (state == StreamState.HalfClosedRemote ||
                     state == StreamState.Closed)
                 {
-                    await iPipe.WriteData(1u, 0, true);
+                    await iPipe.WriteData(1u, 0, endOfStream: true);
                 }
 
                 var ok = await handlerDone.WaitAsync(
@@ -878,7 +878,7 @@ namespace Http2Tests
             }
             if (sendData)
             {
-                await inPipe.WriteData(1u, 0, false);
+                await inPipe.WriteData(1u, 0);
             }
             if (sendTrailers)
             {
@@ -913,7 +913,7 @@ namespace Http2Tests
             }
             if (sendData)
             {
-                await inPipe.WriteData(1u, 0, false);
+                await inPipe.WriteData(1u, 0);
             }
             if (sendTrailers)
             {
@@ -1082,7 +1082,7 @@ namespace Http2Tests
             var hEncoder = new Encoder();
             await inPipe.WriteHeaders(hEncoder, 111u, false, DefaultGetHeaders);
 
-            await inPipe.WriteData(streamId, 0, false);
+            await inPipe.WriteData(streamId, 0);
             await outPipe.AssertResetStreamReception(streamId, ErrorCode.StreamClosed);
         }
 
@@ -1101,7 +1101,7 @@ namespace Http2Tests
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
                 true, inPipe, outPipe, loggerProvider, listener);
 
-            await inPipe.WriteData(streamId, 0, false);
+            await inPipe.WriteData(streamId, 0);
             await outPipe.AssertGoAwayReception(ErrorCode.StreamClosed, 0u);
         }
     }
