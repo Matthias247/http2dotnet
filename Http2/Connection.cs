@@ -53,7 +53,6 @@ namespace Http2
 
         private SharedData shared;
 
-        private static readonly ArrayPool<byte> _pool = ArrayPool<byte>.Shared;
         byte[] receiveBuffer;
 
         /// <summary>Whether the initial settings have been received from the remote</summary>
@@ -137,7 +136,7 @@ namespace Http2
             this.inputStream = inputStream;
 
             // Allocate a receive buffer from the pool
-            receiveBuffer = _pool.Rent(
+            receiveBuffer = config.BufferPool.Rent(
                 (int)localSettings.MaxFrameSize + FrameHeader.HeaderSize);
 
             // Initialize shared data
@@ -384,7 +383,7 @@ namespace Http2
             }
 
             // Return the receiveBuffer back to the pool
-            _pool.Return(receiveBuffer);
+            config.BufferPool.Return(receiveBuffer);
             receiveBuffer = null;
 
             // Dispose the hpack decoder

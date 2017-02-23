@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using Http2.Hpack;
 
 namespace Http2
@@ -37,17 +38,25 @@ namespace Http2
         /// </summary>
         public readonly Settings Settings;
 
+        /// <summary>
+        /// The buffer pool which will be utilized for allocating send and
+        /// receive buffers.
+        /// </summary>
+        public readonly ArrayPool<byte> BufferPool;
+
         internal ConnectionConfiguration(
             bool isServer,
             Func<IStream, bool> streamListener,
             HuffmanStrategy? huffmanStrategy,
             Settings settings,
+            ArrayPool<byte> bufferPool,
             int clientPrefaceTimeout)
         {
             this.IsServer = isServer;
             this.StreamListener = streamListener;
             this.HuffmanStrategy = huffmanStrategy;
             this.Settings = settings;
+            this.BufferPool = bufferPool;
             this.ClientPrefaceTimeout = clientPrefaceTimeout;
         }
     }
@@ -63,6 +72,7 @@ namespace Http2
         Func<IStream, bool> streamListener = null;
         HuffmanStrategy? huffmanStrategy = null;
         Settings settings = Settings.Default;
+        ArrayPool<byte> bufferPool = null;
         int clientPrefaceTimeout = DefaultClientPrefaceTimeout;
 
         /// <summary>
@@ -89,11 +99,15 @@ namespace Http2
                     "Server connections must have configured a StreamListener");
             }
 
+            var pool = bufferPool;
+            if (pool == null) pool = ArrayPool<byte>.Shared;
+
             var config = new ConnectionConfiguration(
                 isServer: isServer,
                 streamListener: streamListener,
                 huffmanStrategy: huffmanStrategy,
                 settings: settings,
+                bufferPool: pool,
                 clientPrefaceTimeout: clientPrefaceTimeout);
 
             return config;
@@ -137,6 +151,20 @@ namespace Http2
                 throw new Exception("Invalid settings");
             }
             this.settings = settings;
+            return this;
+        }
+
+        /// <summary>
+        /// Configures a buffer pool which will be utilized for allocating send
+        /// and receive buffers.
+        /// If this is not explicitely configured ArrayPool&lt;byte&gt;.Shared
+        /// will be used.
+        /// </summary>
+        /// <param name="pool">The buffer pool to utilize</param>
+        public ConnectionConfigurationBuilder UseBufferPool(ArrayPool<byte> pool)
+        {
+            if (pool == null) throw new ArgumentNullException(nameof(pool));
+            this.bufferPool = pool;
             return this;
         }
 

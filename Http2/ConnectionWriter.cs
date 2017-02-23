@@ -84,8 +84,6 @@ namespace Http2
             public Http2Error? Result;
         }
 
-        private static readonly ArrayPool<byte> _pool = ArrayPool<byte>.Shared;
-
         /// <summary>The associated connection</summary>
         public Connection Connection { get; }
         /// <summary>The output stream this is utilizing</summary>
@@ -138,7 +136,8 @@ namespace Http2
             this.options = options;
             this.hEncoder = new Hpack.Encoder(hpackOptions);
             // Create a buffer for outgoing data
-            this.outBuf = _pool.Rent(FrameHeader.HeaderSize + options.MaxFrameSize);
+            this.outBuf = Connection.config.BufferPool.Rent(
+                FrameHeader.HeaderSize + options.MaxFrameSize);
             // Start the task that performs the actual writing
             this.writeTask = Task.Run(() => this.RunAsync());
         }
@@ -263,7 +262,7 @@ namespace Http2
 
             // Return buffer to the pool.
             // As all writes are completed we no longer need it.
-            _pool.Return(this.outBuf);
+            Connection.config.BufferPool.Return(this.outBuf);
             this.outBuf = null;
         }
 
