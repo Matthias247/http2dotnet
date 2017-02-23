@@ -348,7 +348,7 @@ namespace Http2
                         // Only need to do this if the stream has not yet ended
                         if (!streamClosedFromRemote)
                         {
-                            var possibleWindowUpdate = recvBuf.Capacity - this.receiveWindow;
+                            var possibleWindowUpdate = recvBuf.Free - this.receiveWindow;
                             if (possibleWindowUpdate >= (recvBuf.Capacity/2))
                             {
                                 windowUpdateAmount = possibleWindowUpdate;

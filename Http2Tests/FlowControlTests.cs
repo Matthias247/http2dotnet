@@ -51,26 +51,20 @@ namespace Http2Tests
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
 
-            Func<IStream, bool> listener = (s) =>
-            {
-                Task.Run(async () =>
-                {
-                    await s.ReadHeadersAsync();
-                    var data = await s.ReadAllToArrayWithTimeout();
-                });
-                return true;
-            };
-
             // Lower the initial window size so that stream window updates are
             // sent earlier than connection window updates
             var settings = Settings.Default;
             settings.InitialWindowSize = 16000;
-            var http2Con = await ConnectionUtils.BuildEstablishedConnection(
-                true, inPipe, outPipe, loggerProvider, listener,
+            var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe,
                 localSettings: settings);
 
-            var hEncoder = new Encoder();
-            await inPipe.WriteHeaders(hEncoder, 1, false, DefaultGetHeaders);
+            // Consume all data on reader side
+            var readTask = Task.Run(async () =>
+            {
+                await res.stream.ReadHeadersAsync();
+                var data = await res.stream.ReadAllToArrayWithTimeout();
+            });
 
             for (var i = 0; i < dataLength.Length; i++)
             {
@@ -89,6 +83,54 @@ namespace Http2Tests
                     await outPipe.AssertWindowUpdate(1, expectedStreamWindowUpdates[i]);
                 }
             }
+        }
+
+        [Fact]
+        public async Task StreamWindowUpdatesShouldRespectBufferState()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+
+            // Lower the initial window size so that stream window updates are
+            // sent earlier than connection window updates
+            var settings = Settings.Default;
+            settings.InitialWindowSize = 16000;
+            settings.MaxFrameSize = 1000000;
+            var res = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe,
+                localSettings: settings);
+
+            // Write 12k of data. Buffer amount: 12k. Remaining window: 4k
+            await inPipe.WriteData(1u, 12000);
+            // Read 5k of data. Buffer amount: 7k
+            await res.stream.ReadAllWithTimeout(new ArraySegment<byte>(new byte[5000]));
+            // This should not trigger a window update
+            await inPipe.WritePing(new byte[8], false);
+            await outPipe.ReadAndDiscardPong();
+            // Read 5k of data. Buffer amount: 2k
+            await res.stream.ReadAllWithTimeout(new ArraySegment<byte>(new byte[5000]));
+            // Expect a window update of 10k. Remaining window: 14k
+            await outPipe.AssertWindowUpdate(1u, 10000);
+            // Read 2k of data - buffer is now drained
+            await res.stream.ReadAllWithTimeout(new ArraySegment<byte>(new byte[2000]));
+            // This should not trigger a window update
+            await inPipe.WritePing(new byte[8], false);
+            await outPipe.ReadAndDiscardPong();
+
+            // Write 4k of data. Buffer amount: 4k. Remaining window: 10k
+            await inPipe.WriteData(1u, 4000);
+            // Read 4k of data. Buffer amount: 0k
+            await res.stream.ReadAllWithTimeout(new ArraySegment<byte>(new byte[4000]));
+            // This should not trigger a window update
+            await inPipe.WritePing(new byte[8], false);
+            await outPipe.ReadAndDiscardPong();
+
+            // Write 8k of data. Buffer amount: 8k. Remaining window: 2k
+            await inPipe.WriteData(1u, 8000);
+            // Read 5k of data. Buffer amount: 3k
+            await res.stream.ReadAllWithTimeout(new ArraySegment<byte>(new byte[5000]));
+            // Expect a window update of 11k. Remaining window: 13k
+            await outPipe.AssertWindowUpdate(1u, 11000);
         }
 
         [Fact]

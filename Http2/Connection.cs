@@ -377,7 +377,7 @@ namespace Http2
                 // fromRemote is set to true since there's no need to send
                 // a Reset frame and the stream will get removed from the
                 // map here
-                await kvp.Value.Reset(ErrorCode.Cancel, fromRemote: true);
+                await kvp.Value.Reset(ErrorCode.ConnectError, fromRemote: true);
             }
 
             // Cleanup all pending Pings
