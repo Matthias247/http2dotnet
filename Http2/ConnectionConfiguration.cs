@@ -19,20 +19,16 @@ namespace Http2
         /// <summary>
         /// The function that should be called whenever a new stream is
         /// opened by the remote peer.
-        /// The function should return true if it wants to handle the new
-        /// stream and false otherwise.
-        /// Applications should handle the stream in another Task.
-        /// The Task from which this function is called may not be blocked.
         /// </summary>
         public readonly Func<IStream, bool> StreamListener;
 
         /// <summary>
-        /// Strategy for applying huffman encoding on outgoing headers
+        /// Strategy for applying huffman encoding on outgoing headers.
         /// </summary>
         public readonly HuffmanStrategy? HuffmanStrategy;
 
         /// <summary>
-        /// Allows to override settings for the connection
+        /// The HTTP/2 settings which will be utilized for the connection.
         /// </summary>
         public readonly Settings Settings;
 
@@ -92,6 +88,15 @@ namespace Http2
             return config;
         }
 
+        /// <summary>
+        /// Configures the function that should be called whenever a new stream
+        /// is opened by the remote peer. This function must be configured for
+        /// server configurations.
+        /// The function should return true if it wants to handle the new
+        /// stream and false otherwise.
+        /// Applications should handle the stream in another Task.
+        /// The Task from which this function is called may not be blocked.
+        /// </summary>
         public ConnectionConfigurationBuilder UseStreamListener(
             Func<IStream, bool> streamListener)
         {
@@ -99,12 +104,21 @@ namespace Http2
             return this;
         }
 
+        /// <summary>
+        /// Configures the strategy for applying huffman encoding on outgoing
+        /// headers.
+        /// </summary>
         public ConnectionConfigurationBuilder UseHuffmanStrategy(HuffmanStrategy strategy)
         {
             this.huffmanStrategy = strategy;
             return this;
         }
 
+        /// <summary>
+        /// Allows to override the HTTP/2 settings for the connection.
+        /// If not explicitely specified the default HTTP/2 settings,
+        /// which are stored within Settings.Default, will be utilized.
+        /// </summary>
         public ConnectionConfigurationBuilder UseSettings(Settings settings)
         {
             if (!settings.Valid)

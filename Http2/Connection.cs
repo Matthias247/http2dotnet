@@ -142,9 +142,6 @@ namespace Http2
             if (outputStream == null) throw new ArgumentNullException(nameof(outputStream));
             this.inputStream = inputStream;
 
-            if (config.IsServer && config.StreamListener == null)
-                throw new ArgumentNullException(nameof(config.StreamListener));
-
             // Allocate a receive buffer from the pool
             receiveBuffer = _pool.Rent(
                 (int)localSettings.MaxFrameSize + FrameHeader.HeaderSize);

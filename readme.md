@@ -18,7 +18,7 @@ This library is currently in an experimental state. The majority of HTTP/2
 features have been implemented and there is already a pretty good test coverage.
 It was tested in a h2c with prior knowledge configuration against **nghttp2**
 and **h2load**. It was however not yet tested with an encrypted connection and
-a browser based client due a missing SSL connection with ALPN negotation.
+a browser based client due a missing SSL connection with ALPN negotiation.
 Various features (especially for client side usage) have not yet been
 implemented (see Current limitations).
 
