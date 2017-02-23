@@ -76,12 +76,6 @@ namespace Http2
 
         private TaskCompletionSource<GoAwayReason> remoteGoAwayTcs =
             new TaskCompletionSource<GoAwayReason>();
-        
-        /// <summary>
-        /// The time time wait for a Client Preface on startup
-        /// at server side.
-        /// </summary>
-        private static readonly int ClientPrefaceTimeout = 1000;
 
         /// <summary>
         /// Whether the connection represents the client or server part of
@@ -227,8 +221,7 @@ namespace Http2
                 // which is then followed by the remote SETTINGS
                 if (IsServer)
                 {
-                    // TODO: Make the timeout configureable
-                    await ClientPreface.ReadAsync(inputStream, ClientPrefaceTimeout);
+                    await ClientPreface.ReadAsync(inputStream, config.ClientPrefaceTimeout);
                     if (logger != null && logger.IsEnabled(LogLevel.Trace))
                     {
                         logger.LogTrace("rcvd ClientPreface");
@@ -1257,7 +1250,7 @@ namespace Http2
             // We don't reuse the same ArraySegment to avoid capturing it in the closure
             var prioData = PriorityData.DecodeFrom(
                 new ArraySegment<byte>(receiveBuffer, 0, PriorityData.Size));
-            
+
             return HandlePriorityData(fh.StreamId, prioData);
         }
 

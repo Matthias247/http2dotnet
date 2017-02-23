@@ -12,11 +12,10 @@ namespace Http2Tests
 {
     public class ConnectionPrefaceTests
     {
-        private static Connection BuildConnection(
+        private Connection BuildConnection(
             bool isServer,
             IReadableByteStream inputStream,
-            IWriteAndCloseableByteStream outputStream,
-            ILoggerProvider loggerProvider)
+            IWriteAndCloseableByteStream outputStream)
         {
             ILogger logger = null;
             if (loggerProvider != null)
@@ -24,9 +23,12 @@ namespace Http2Tests
                 logger = loggerProvider.CreateLogger("http2Con");
             }
 
+            // Decrease the timeout for the preface,
+            // as this speeds the test up
             var config =
                 new ConnectionConfigurationBuilder(isServer)
                 .UseStreamListener((s) => false)
+                .UseClientPrefaceTimeout(200)
                 .Build();
 
             return new Connection(
@@ -42,16 +44,6 @@ namespace Http2Tests
         public ConnectionPrefaceTests(ITestOutputHelper outputHelper)
         {
             this.loggerProvider = new XUnitOutputLoggerProvider(outputHelper);
-            // Decrease the timeout for the preface,
-            // as this speeds the test up
-            // TODO: This does not seem to work reliably
-            // Most likely the static readonly variable is cached
-            // somewhere and the new value is never applied.
-            var timeoutProp =
-                typeof(Connection).GetField(
-                    "ClientPrefaceTimeout",
-                    BindingFlags.Static | BindingFlags.NonPublic);
-            timeoutProp.SetValue(null, 200);
         }
 
         [Fact]
@@ -59,8 +51,7 @@ namespace Http2Tests
         {
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
-            var logger = loggerProvider.CreateLogger("http2Con");
-            var http2Con = BuildConnection(false, inPipe, outPipe, loggerProvider);
+            var http2Con = BuildConnection(false, inPipe, outPipe);
 
             var b = new byte[ClientPreface.Length];
             await outPipe.ReadAllWithTimeout(new ArraySegment<byte>(b));
@@ -72,8 +63,7 @@ namespace Http2Tests
         {
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
-            var logger = loggerProvider.CreateLogger("http2Con");
-            var http2Con = BuildConnection(true, inPipe, outPipe, loggerProvider);
+            var http2Con = BuildConnection(true, inPipe, outPipe);
 
             var b = new byte[ClientPreface.Length];
             // Initialize with non-preface data
@@ -105,8 +95,7 @@ namespace Http2Tests
         {
             var inPipe = new BufferedPipe(1024);
             var outPipe = new BufferedPipe(1024);
-            var logger = loggerProvider.CreateLogger("http2Con");
-            var http2Con = BuildConnection(true, inPipe, outPipe, loggerProvider);
+            var http2Con = BuildConnection(true, inPipe, outPipe);
 
             // Write some dummy data
             // All this data is not long enough to be a preface, so the
@@ -122,13 +111,13 @@ namespace Http2Tests
             // checked - so they must be discarded
             await outPipe.ReadAndDiscardSettings();
 
-            // Wait for the stream to end within 2 seconds
+            // Wait for the stream to end within 400ms.
             // This is longer than the timeout in the connection waiting for the
             // preface
 
             var buf = new byte[1];
             var readTask = outPipe.ReadAsync(new ArraySegment<byte>(buf)).AsTask();
-            var timeoutTask = Task.Delay(1500);
+            var timeoutTask = Task.Delay(400);
             var finishedTask = await Task.WhenAny(
                 new Task[]{ readTask, timeoutTask });
             if (ReferenceEquals(finishedTask, readTask))

@@ -28,6 +28,11 @@ namespace Http2
         public readonly HuffmanStrategy? HuffmanStrategy;
 
         /// <summary>
+        /// The time to wait for a Client Preface on startup at server side.
+        /// </summary>
+        public readonly int ClientPrefaceTimeout;
+
+        /// <summary>
         /// The HTTP/2 settings which will be utilized for the connection.
         /// </summary>
         public readonly Settings Settings;
@@ -36,12 +41,14 @@ namespace Http2
             bool isServer,
             Func<IStream, bool> streamListener,
             HuffmanStrategy? huffmanStrategy,
-            Settings settings)
+            Settings settings,
+            int clientPrefaceTimeout)
         {
             this.IsServer = isServer;
             this.StreamListener = streamListener;
             this.HuffmanStrategy = huffmanStrategy;
             this.Settings = settings;
+            this.ClientPrefaceTimeout = clientPrefaceTimeout;
         }
     }
 
@@ -50,10 +57,13 @@ namespace Http2
     /// </summary>
     public class ConnectionConfigurationBuilder
     {
+        private const int DefaultClientPrefaceTimeout = 1000;
+
         bool isServer = true;
         Func<IStream, bool> streamListener = null;
         HuffmanStrategy? huffmanStrategy = null;
         Settings settings = Settings.Default;
+        int clientPrefaceTimeout = DefaultClientPrefaceTimeout;
 
         /// <summary>
         /// Creates a new Builder for connection configurations.
@@ -83,7 +93,8 @@ namespace Http2
                 isServer: isServer,
                 streamListener: streamListener,
                 huffmanStrategy: huffmanStrategy,
-                settings: settings);
+                settings: settings,
+                clientPrefaceTimeout: clientPrefaceTimeout);
 
             return config;
         }
@@ -129,5 +140,19 @@ namespace Http2
             return this;
         }
 
+        /// <summary>
+        /// Allows to override the time time wait for a Client Preface on startup
+        /// at server side.
+        /// </summary>
+        /// <param name="timeout">
+        /// The time to wait for a client preface.
+        /// The time must be configured in milliseconds and must be bigger than 0.
+        /// </param>
+        public ConnectionConfigurationBuilder UseClientPrefaceTimeout(int timeout)
+        {
+            if (timeout <= 0) throw new ArgumentException(nameof(timeout));
+            this.clientPrefaceTimeout = timeout;
+            return this;
+        }
     }
 }
