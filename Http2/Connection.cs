@@ -6,8 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
-using Http2.Hpack;
-
 namespace Http2
 {
     /// <summary>
@@ -16,46 +14,10 @@ namespace Http2
     public class Connection
     {
         /// <summary>
-        /// Options for creating a HTTP/2 connection
+        /// Optional configuration options, which are valid per connection
         /// </summary>
         public struct Options
         {
-            /// <summary>
-            /// The stream which is used for receiving data
-            /// </summary>
-            public IReadableByteStream InputStream;
-
-            /// <summary>
-            /// The stream which is used for writing data
-            /// </summary>
-            public IWriteAndCloseableByteStream OutputStream;
-
-            /// <summary>
-            /// Whether the connection represents the client or server part of
-            /// a HTTP/2 connection. True for servers.
-            /// </summary>
-            public bool IsServer;
-
-            /// <summary>
-            /// The function that should be called whenever a new stream is
-            /// opened by the remote peer.
-            /// The function should return true if it wants to handle the new
-            /// stream and false otherwise.
-            /// Applications should handle the stream in another Task.
-            /// The Task from which this function is called may not be blocked.
-            /// </summary>
-            public Func<IStream, bool> StreamListener;
-
-            /// <summary>
-            /// Strategy for applying huffman encoding on outgoing headers
-            /// </summary>
-            public HuffmanStrategy? HuffmanStrategy;
-
-            /// <summary>
-            /// Allows to override settings for the connection
-            /// </summary>
-            public Settings Settings;
-
             /// <summary>
             /// Optional logger
             /// </summary>
@@ -100,12 +62,13 @@ namespace Http2
         /// <summary>Flow control window for the connection</summary>
         private int connReceiveFlowWindow = Constants.InitialConnectionWindowSize;
 
-        private readonly Func<IStream, bool> StreamListener;
         internal readonly ILogger logger;
 
         internal readonly ConnectionWriter writer;
         internal readonly IReadableByteStream inputStream;
         private readonly Task readerDone;
+
+        internal readonly ConnectionConfiguration config;
 
         private readonly HeaderReader headerReader;
         internal readonly Settings localSettings;
@@ -124,7 +87,7 @@ namespace Http2
         /// Whether the connection represents the client or server part of
         /// a HTTP/2 connection. True for servers.
         /// </summary>
-        public readonly bool IsServer;
+        public bool IsServer => config.IsServer;
 
         /// <summary>
         /// Returns a Task that will be completed once the Connection has been
@@ -143,13 +106,31 @@ namespace Http2
         /// <summary>
         /// Creates a new HTTP/2 connection on top of the a bidirectional stream
         /// </summary>
-        public Connection(Options options)
+        /// <param name="config">
+        /// The configuration options that are applied to the connection and
+        /// which are shared between multiple connections.
+        /// </param>
+        /// <param name="inputStream">
+        /// The stream which is used for receiving data
+        /// </param>
+        /// <param name="outputStream">
+        /// The stream which is used for writing data
+        /// </param>
+        /// <param name="options">
+        /// Optional configuration options which are unique per connection
+        /// </param>
+        public Connection(
+            ConnectionConfiguration config,
+            IReadableByteStream inputStream,
+            IWriteAndCloseableByteStream outputStream,
+            Options? options = null)
         {
-            IsServer = options.IsServer;
-            logger = options.Logger;
+            if (config == null) throw new ArgumentNullException(nameof(config));
+            this.config = config;
+            this.logger = options?.Logger;
 
-            if (!options.Settings.Valid) throw new ArgumentException(nameof(options.Settings));
-            localSettings = options.Settings;
+            // TODO: As long as they are not changeable there's actually no need for the field
+            localSettings = config.Settings;
             // Disable server push as it's not supported.
             // Disabling it here is easier than wanting a custom config from the
             // user which disables it.
@@ -157,13 +138,12 @@ namespace Http2
             // TODO: If the remote settings are not the default ones we will
             // also need to validate those
 
-            if (options.InputStream == null) throw new ArgumentNullException(nameof(options.InputStream));
-            if (options.OutputStream == null) throw new ArgumentNullException(nameof(options.OutputStream));
-            this.inputStream = options.InputStream;
+            if (inputStream == null) throw new ArgumentNullException(nameof(inputStream));
+            if (outputStream == null) throw new ArgumentNullException(nameof(outputStream));
+            this.inputStream = inputStream;
 
-            if (options.IsServer && options.StreamListener == null)
-                throw new ArgumentNullException(nameof(options.StreamListener));
-            StreamListener = options.StreamListener;
+            if (config.IsServer && config.StreamListener == null)
+                throw new ArgumentNullException(nameof(config.StreamListener));
 
             // Allocate a receive buffer from the pool
             receiveBuffer = _pool.Rent(
@@ -186,7 +166,7 @@ namespace Http2
 
             // Start the writing task
             writer = new ConnectionWriter(
-                this, options.OutputStream,
+                this, outputStream,
                 new ConnectionWriter.Options
                 {
                     MaxFrameSize = (int)remoteSettings.MaxFrameSize,
@@ -196,7 +176,7 @@ namespace Http2
                 new Hpack.Encoder.Options
                 {
                     DynamicTableSize = (int)remoteSettings.HeaderTableSize,
-                    HuffmanStrategy = options.HuffmanStrategy,
+                    HuffmanStrategy = config.HuffmanStrategy,
                 }
             );
 
@@ -213,7 +193,7 @@ namespace Http2
                 localSettings.MaxFrameSize,
                 localSettings.MaxHeaderListSize,
                 receiveBuffer,
-                options.InputStream,
+                inputStream,
                 logger
             );
 
@@ -811,7 +791,7 @@ namespace Http2
                 }
             }
 
-            var handledByUser = StreamListener(newStream);
+            var handledByUser = config.StreamListener(newStream);
             if (!handledByUser)
             {
                 // The user isn't interested in the stream.

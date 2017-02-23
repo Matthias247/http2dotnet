@@ -19,15 +19,18 @@ namespace Http2Tests
             IReadableByteStream inputStream,
             IWriteAndCloseableByteStream outputStream)
         {
-            return new Connection(new Connection.Options
-            {
-                InputStream = inputStream,
-                OutputStream = outputStream,
-                IsServer = isServer,
-                Settings = settings,
-                StreamListener = (s) => false,
-                Logger = loggerProvider.CreateLogger("http2Con"),
-            });
+            var config =
+                new ConnectionConfigurationBuilder(isServer)
+                .UseSettings(settings)
+                .UseStreamListener((s) => false)
+                .Build();
+
+            return new Connection(
+                config, inputStream, outputStream,
+                new Connection.Options
+                {
+                    Logger = loggerProvider.CreateLogger("http2Con"),
+                });
         }
 
         private ILoggerProvider loggerProvider;

@@ -24,15 +24,17 @@ namespace Http2Tests
                 logger = loggerProvider.CreateLogger("http2Con");
             }
 
-            return new Connection(new Connection.Options
-            {
-                InputStream = inputStream,
-                OutputStream = outputStream,
-                IsServer = isServer,
-                Settings = Settings.Default,
-                Logger = logger,
-                StreamListener = (s) => false,
-            });
+            var config =
+                new ConnectionConfigurationBuilder(isServer)
+                .UseStreamListener((s) => false)
+                .Build();
+
+            return new Connection(
+                config, inputStream, outputStream,
+                new Connection.Options
+                {
+                    Logger = logger,
+                });
         }
 
         private readonly ILoggerProvider loggerProvider;

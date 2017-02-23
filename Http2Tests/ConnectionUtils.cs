@@ -29,17 +29,19 @@ namespace Http2Tests
                 streamListener = (s) => false;
             }
 
-            var lSettings = localSettings ?? Settings.Default;
-            var conn = new Connection(new Connection.Options
-            {
-                InputStream = inputStream,
-                OutputStream = outputStream,
-                IsServer = isServer,
-                Settings = lSettings,
-                Logger = logger,
-                StreamListener = streamListener,
-                HuffmanStrategy = huffmanStrategy,
-            });
+            var config = new ConnectionConfigurationBuilder(isServer)
+                .UseStreamListener(streamListener)
+                .UseHuffmanStrategy(huffmanStrategy)
+                .UseSettings(localSettings ?? Settings.Default)
+                .Build();
+
+            var conn = new Connection(
+                config, inputStream, outputStream,
+                new Connection.Options
+                {
+                    Logger = logger,
+                });
+
             await PerformHandshakes(
                 conn,
                 inputStream, outputStream,

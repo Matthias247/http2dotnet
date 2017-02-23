@@ -87,34 +87,42 @@ To create a `Connection` on top of IO streams the constructor of `Connection`
 can be used:
 
 ```cs
-var http2Connection = new Connection(new Connection.Options
-{
-    InputStream = inputStream,
-    OutputStream = outputStream,
-    IsServer = true,
-    Settings = Settings.Default,
-    StreamListener = AcceptIncomingStream,
-});
+ConnectionConfiguration config =
+    new ConnectionConfigurationBuilder(isServer: true)
+    .UseStreamListener(AcceptIncomingStream)
+    .Build();
+
+Connection http2Connection = new Connection(
+    config: config,
+    inputStream: inputStream,
+    outputStream: outputStream);
 ```
 
-The most important arguments here are:
-- `InputStream`/`OutputStream`: The `Connection` will will use the IO streams
+Configuration settings which are shared between multiple connections are
+configured through the `ConnectionConfigurationBuilder` which stores them in an
+`ConnectionConfiguration` instance. The remaining parameters which are unique
+for each `Connection` instance are configured directly thorugh the `Connection`
+constructor parameters.
+
+The most important arguments for the `ConnectionConfiguration` and
+`Connection` are:
+- `inputStream`/`outputStream`: The `Connection` will will use the IO streams
   to read data from the remote side and send data to the remote side. The
   connection will take ownership of these streams and close the `OutputStream`
   when done.
-- `IsServer`: Specifies whether the local side of the `Connection` represents a
+- `isServer`: Specifies whether the local side of the `Connection` represents a
   HTTP/2 server (`true`) or client (`false`).
-- `Settings`: The HTTP/2 settings that should be used. `Settings.Default`
+- `UseSettings`: The HTTP/2 settings that should be used. `Settings.Default`
   represents the default values from the HTTP/2 specification and should usually
   be a good choice.
-- `StreamListener`: This is a callback function that will be invoked every time
-  a new Stream is initiated from the remote side. This means it is currently
-  only required for HTTP/2 server applications. An `IStream` instance which
-  represents the initiated stream is passed to the callback function as an
-  argument. The callback function should either return `true` if it wants to
-  process the new stream or `false` otherwise. If the application wants to
-  process the new stream it must use it in another `Task` and must not block the
-  callback.
+- `UseStreamListener`: This sets up the callback function that will be invoked
+  every time a new Stream is initiated from the remote side. This means it is
+  currently only required for HTTP/2 server applications.
+  An `IStream` instance which represents the initiated stream is passed to the
+  callback function as an argument. The callback function should either return
+  `true` if it wants to process the new stream or `false` otherwise.
+  If the application wants to process the new stream it must use it in another
+  `Task` and must not block the callback.
 
 Besides that there are various optional arguments which allow further control
 about the desired behavior.

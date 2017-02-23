@@ -97,7 +97,11 @@ class Program
     {
         var connectionId = 0;
 
-        var settings = Settings.Default;
+        var config =
+            new ConnectionConfigurationBuilder(isServer: true)
+            .UseStreamListener(AcceptIncomingStream)
+            .UseHuffmanStrategy(HuffmanStrategy.Never)
+            .Build();
 
         while (true)
         {
@@ -111,16 +115,12 @@ class Program
             //var wrappedStreams = netStream.CreateStreams();
 
             // Build a HTTP connection on top of the stream abstraction
-            var http2Con = new Connection(new Connection.Options
-            {
-                InputStream = wrappedStreams.ReadableStream,
-                OutputStream = wrappedStreams.WriteableStream,
-                IsServer = true,
-                Settings = settings,
-                StreamListener = AcceptIncomingStream,
-                HuffmanStrategy = HuffmanStrategy.Never,
-                Logger = logProvider.CreateLogger("HTTP2Conn" + connectionId),
-            });
+            var http2Con = new Connection(
+                config, wrappedStreams.ReadableStream, wrappedStreams.WriteableStream,
+                options: new Connection.Options
+                {
+                    Logger = logProvider.CreateLogger("HTTP2Conn" + connectionId),
+                });
 
             connectionId++;
         }

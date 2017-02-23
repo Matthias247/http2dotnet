@@ -75,6 +75,13 @@ class Program
         var settings = Settings.Default;
         settings.MaxConcurrentStreams = 50;
 
+        var config =
+            new ConnectionConfigurationBuilder(true)
+            .UseStreamListener(AcceptIncomingStream)
+            .UseSettings(settings)
+            .UseHuffmanStrategy(HuffmanStrategy.IfSmaller)
+            .Build();
+
         while (true)
         {
             // Accept TCP sockets
@@ -87,16 +94,12 @@ class Program
             //var wrappedStreams = netStream.CreateStreams();
 
             // Build a HTTP connection on top of the stream abstraction
-            var http2Con = new Connection(new Connection.Options
-            {
-                InputStream = wrappedStreams.ReadableStream,
-                OutputStream = wrappedStreams.WriteableStream,
-                IsServer = true,
-                Settings = settings,
-                StreamListener = AcceptIncomingStream,
-                HuffmanStrategy = HuffmanStrategy.IfSmaller,
-                Logger = logProvider.CreateLogger("HTTP2Conn" + connectionId),
-            });
+            var http2Con = new Connection(
+                config, wrappedStreams.ReadableStream, wrappedStreams.WriteableStream,
+                options: new Connection.Options
+                {
+                    Logger = logProvider.CreateLogger("HTTP2Conn" + connectionId),
+                });
 
             // Close the connection if we get a GoAway from the client
             var remoteGoAwayTask = http2Con.RemoteGoAwayReason;
