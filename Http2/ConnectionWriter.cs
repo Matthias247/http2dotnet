@@ -134,11 +134,28 @@ namespace Http2
             this.outStream = outStream;
             this.options = options;
             this.hEncoder = new Hpack.Encoder(hpackOptions);
-            // Create a buffer for outgoing data
-            this.outBuf = Connection.config.BufferPool.Rent(
-                FrameHeader.HeaderSize + options.MaxFrameSize);
             // Start the task that performs the actual writing
             this.writeTask = Task.Run(() => this.RunAsync());
+        }
+
+        internal void EnsureBuffer(int minSize)
+        {
+            if (outBuf != null)
+            {
+                if (outBuf.Length >= minSize) return;
+                // Need a bigger buffer - return the old one
+                Connection.config.BufferPool.Return(outBuf);
+                outBuf = null;
+            }
+
+            outBuf = Connection.config.BufferPool.Rent(minSize);
+        }
+
+        internal void ReleaseBuffer(int treshold)
+        {
+            if (outBuf == null || outBuf.Length <= treshold) return;
+            Connection.config.BufferPool.Return(outBuf);
+            outBuf = null;
         }
 
         /// <summary>
@@ -148,6 +165,8 @@ namespace Http2
         {
             try
             {
+                EnsureBuffer(Connection.PersistentBufferSize);
+
                 // If we are a client then we have to write the preface before
                 // doing anything else
                 if (!Connection.IsServer)
@@ -211,6 +230,7 @@ namespace Http2
                         {
                             // TODO: Probably the ACK should be written in all
                             // cases.
+                            EnsureBuffer(Connection.PersistentBufferSize);
                             await WriteSettingsAckAsync();
                         }
                         changeSettings.Result = err;
@@ -218,7 +238,9 @@ namespace Http2
                     }
                     else if (writeRequest != null)
                     {
+                        EnsureBuffer(Connection.PersistentBufferSize);
                         await ProcessWriteRequestAsync(writeRequest);
+                        ReleaseBuffer(Connection.PersistentBufferSize);
                     }
                     else if (doClose)
                     {
@@ -261,8 +283,11 @@ namespace Http2
 
             // Return buffer to the pool.
             // As all writes are completed we no longer need it.
-            Connection.config.BufferPool.Return(this.outBuf);
-            this.outBuf = null;
+            if (outBuf != null)
+            {
+                Connection.config.BufferPool.Return(outBuf);
+                outBuf = null;
+            }
         }
 
         /// <summary>
@@ -786,14 +811,16 @@ namespace Http2
         private Task WriteGoAwayFrameAsync(WriteRequest wr)
         {
             var dataSize = wr.GoAwayData.RequiredSize;
+            var totalSize = FrameHeader.HeaderSize + dataSize;
+            EnsureBuffer(totalSize);
+
             wr.Header.Length = dataSize;
-
             LogOutgoingFrameHeader(wr.Header);
-
             var headerView = new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize);
             wr.Header.EncodeInto(headerView);
-            wr.GoAwayData.EncodeInto(new ArraySegment<byte>(outBuf, FrameHeader.HeaderSize, dataSize));
-            var totalSize = FrameHeader.HeaderSize + dataSize;
+
+            wr.GoAwayData.EncodeInto(
+                new ArraySegment<byte>(outBuf, FrameHeader.HeaderSize, dataSize));
             var data = new ArraySegment<byte>(outBuf, 0, totalSize);
 
             return this.outStream.WriteAsync(data);
@@ -808,7 +835,8 @@ namespace Http2
             LogOutgoingFrameHeader(wr.Header);
             // Serialize the frame header into the outgoing buffer
             wr.Header.EncodeInto(new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize));
-            wr.ResetFrameData.EncodeInto(new ArraySegment<byte>(outBuf, FrameHeader.HeaderSize, ResetFrameData.Size));
+            wr.ResetFrameData.EncodeInto(
+                new ArraySegment<byte>(outBuf, FrameHeader.HeaderSize, ResetFrameData.Size));
             var totalSize = FrameHeader.HeaderSize + ResetFrameData.Size;
             var data = new ArraySegment<byte>(outBuf, 0, totalSize);
 
@@ -863,12 +891,15 @@ namespace Http2
         /// </summary>
         private async Task WriteHeadersAsync(WriteRequest wr)
         {
+            // Get an output buffer that's big enough for the headers.
+            // As there's currently no estimation logic how big the buffer needs
+            // to be we just take options.MaxFrameSize.
+            // The output buffer could however also be limited to a smaller value,
+            // which means more continuation frames would be used (see logic below).
+            EnsureBuffer(FrameHeader.HeaderSize + options.MaxFrameSize);
+
             // Limit the maximum frame size also to the limit of the output
             // buffer.
-            // If the remote increases the size through SETTINGS update we might
-            // try to write bigger frames, which would however need a bigger
-            // output buffer. Instead of allowing this and reallocating the buffer
-            // we keep the old buffer and use it's max size for headers.
             var maxFrameSize = Math.Min(
                 options.MaxFrameSize,
                 outBuf.Length - FrameHeader.HeaderSize);
