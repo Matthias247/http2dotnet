@@ -36,27 +36,21 @@ namespace Http2
         uint maxFrameSize;
         uint maxHeaderFieldsSize;
         Decoder hpackDecoder;
-        byte[] buffer;
         IReadableByteStream reader;
         ILogger logger;
 
         public HeaderReader(
             Decoder hpackDecoder,
             uint maxFrameSize, uint maxHeaderFieldsSize,
-            byte[] buffer,
             IReadableByteStream reader,
             ILogger logger
         )
         {
             this.reader = reader;
             this.hpackDecoder = hpackDecoder;
-            this.buffer = buffer;
             this.maxFrameSize = maxFrameSize;
             this.maxHeaderFieldsSize = maxHeaderFieldsSize;
             this.logger = logger;
-
-            if (buffer == null || buffer.Length < maxFrameSize)
-                throw new ArgumentException(nameof(buffer));
         }
 
         public void Dispose()
@@ -94,7 +88,9 @@ namespace Http2
         /// The frame header of the HEADER frame which indicates that headers
         /// must be read.
         /// </param>
-        public async ValueTask<Result> ReadHeaders(FrameHeader firstHeader)
+        public async ValueTask<Result> ReadHeaders(
+            FrameHeader firstHeader,
+            Func<int, byte[]> ensureBuffer)
         {
             // Check maximum frame size
             if (firstHeader.Length > maxFrameSize)
@@ -138,6 +134,11 @@ namespace Http2
                 };
             }
 
+            // Get a buffer for the initial frame
+            // TODO: We now always read the initial frame at once, but we could
+            // split it up into multiple smaller reads if the receive buffer is
+            // smaller. The code needs to be slightly adapted for this.
+            byte[] buffer = ensureBuffer(firstHeader.Length);
             // Read the content of the initial frame
             await reader.ReadAll(new ArraySegment<byte>(buffer, 0, firstHeader.Length));
 
@@ -196,6 +197,8 @@ namespace Http2
             {
                 // Read the next frame header
                 // This must be a continuation frame
+                // Remark: No need for ensureBuffer, since the buffer is
+                // guaranteed to be larger than the first frameheader buffer
                 var contHeader = await FrameHeader.ReceiveAsync(reader, buffer);
                 if (logger != null && logger.IsEnabled(LogLevel.Trace))
                 {
@@ -221,6 +224,10 @@ namespace Http2
                 isEndOfHeaders = contFlags.HasFlag(ContinuationFrameFlags.EndOfHeaders);
 
                 // Read the HeaderBlockFragment of the continuation frame
+                // TODO: We now always read the frame at once, but we could
+                // split it up into multiple smaller reads if the receive buffer
+                // is smaller. The code needs to be slightly adapted for this.
+                buffer = ensureBuffer(contHeader.Length);
                 await reader.ReadAll(new ArraySegment<byte>(buffer, 0, contHeader.Length));
 
                 offset = 0;

@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.IO;
 using System.Collections.Generic;
 using System.Threading;
@@ -40,6 +39,16 @@ namespace Http2
             /// Tracks active PINGs. Only initialized when needed
             public PingState PingState;
         }
+
+        /// <summary>
+        /// The maximum size of the buffer that should be kept between frame
+        /// receiving operations. Keeping larger buffers around while not
+        /// utilized (e.g. no frames are sent) will only consume unnecessary
+        /// memory. The minimum size must be large enough the accomodate the
+        /// Frame header of the next frame that should be received plus the
+        /// frame content of all fixed-length frames (PING, RST_STREAM, etc.)
+        /// </summary>
+        internal const int PersistentBufferSize = 128;
 
         /// <summary>
         /// Contains information about active PINGs
@@ -135,10 +144,6 @@ namespace Http2
             if (outputStream == null) throw new ArgumentNullException(nameof(outputStream));
             this.inputStream = inputStream;
 
-            // Allocate a receive buffer from the pool
-            receiveBuffer = config.BufferPool.Rent(
-                (int)localSettings.MaxFrameSize + FrameHeader.HeaderSize);
-
             // Initialize shared data
             shared.Mutex = new object();
             shared.streamMap = new Dictionary<uint, StreamImpl>();
@@ -182,7 +187,6 @@ namespace Http2
                 }),
                 localSettings.MaxFrameSize,
                 localSettings.MaxHeaderListSize,
-                receiveBuffer,
                 inputStream,
                 logger
             );
@@ -190,6 +194,32 @@ namespace Http2
             // Start the task that performs the actual reading.
             // The connection is closed once this task is fully finished.
             readerDone = Task.Run(() => this.RunReaderAsync());
+        }
+
+        internal void EnsureBuffer(int minSize)
+        {
+            if (receiveBuffer != null)
+            {
+                if (receiveBuffer.Length >= minSize) return;
+                // Need a bigger buffer - return the old one
+                config.BufferPool.Return(receiveBuffer);
+                receiveBuffer = null;
+            }
+
+            receiveBuffer = config.BufferPool.Rent(minSize);
+        }
+
+        internal void ReleaseBuffer(int treshold)
+        {
+            if (receiveBuffer == null || receiveBuffer.Length < treshold) return;
+            config.BufferPool.Return(receiveBuffer);
+            receiveBuffer = null;
+        }
+
+        internal byte[] GetBuffer(int minSize)
+        {
+            EnsureBuffer(minSize);
+            return receiveBuffer;
         }
 
         /// <summary>
@@ -205,6 +235,7 @@ namespace Http2
                 // receiveBuffer for the write task.
                 // On the client side the preface will still be written before
                 // these settings, since it's handled by the ConnectionWriter.
+                EnsureBuffer(FrameHeader.HeaderSize + localSettings.RequiredSize);
                 var encodedSettingsBuf = new ArraySegment<byte>(
                     receiveBuffer, 0, localSettings.RequiredSize);
                 localSettings.EncodeInto(encodedSettingsBuf);
@@ -220,6 +251,7 @@ namespace Http2
                 // which is then followed by the remote SETTINGS
                 if (IsServer)
                 {
+                    EnsureBuffer(ClientPreface.Length);
                     await ClientPreface.ReadAsync(inputStream, config.ClientPrefaceTimeout);
                     if (logger != null && logger.IsEnabled(LogLevel.Trace))
                     {
@@ -231,7 +263,9 @@ namespace Http2
                 while (continueRead)
                 {
                     // Read and process a single HTTP/2 frame and it's data
+                    EnsureBuffer(PersistentBufferSize);
                     var err = await ReadOneFrame();
+                    ReleaseBuffer(PersistentBufferSize);
                     if (err != null)
                     {
                         if (err.Value.StreamId == 0)
@@ -383,8 +417,11 @@ namespace Http2
             }
 
             // Return the receiveBuffer back to the pool
-            config.BufferPool.Return(receiveBuffer);
-            receiveBuffer = null;
+            if (receiveBuffer != null)
+            {
+                config.BufferPool.Return(receiveBuffer);
+                receiveBuffer = null;
+            }
 
             // Dispose the hpack decoder
             headerReader.Dispose();
@@ -612,7 +649,7 @@ namespace Http2
                     return await HandleDataFrame(fh);
                 case FrameType.Headers:
                     // Use the header reader to get all headers combined
-                    var headerRes = await headerReader.ReadHeaders(fh);
+                    var headerRes = await headerReader.ReadHeaders(fh, GetBuffer);
                     if (headerRes.Error != null) return headerRes.Error;
                     return await HandleHeaders(headerRes.HeaderData);
                 default:
@@ -823,6 +860,66 @@ namespace Http2
                 };
             }
 
+            // Consume the data by reading it into our receiveBuffer
+            // As reading might throw an exception a try/catch block is
+            // required to avoid leaking the buffer.
+            var dataBuffer = config.BufferPool.Rent(fh.Length);
+            try
+            {
+                await inputStream.ReadAll(
+                    new ArraySegment<byte>(dataBuffer, 0, fh.Length));
+            }
+            catch (Exception)
+            {
+                config.BufferPool.Return(dataBuffer);
+                throw;
+            }
+
+            var isPadded = (fh.Flags & (byte)DataFrameFlags.Padded) != 0;
+            var padLen = 0;
+            var offset = isPadded ? 1 : 0;
+            var dataSize = fh.Length;
+            if (isPadded)
+            {
+                // Access is safe. Length 1 is checked before
+                padLen = dataBuffer[0];
+                dataSize = fh.Length - 1 - padLen;
+                if (dataSize < 0)
+                {
+                    config.BufferPool.Return(dataBuffer);
+                    return new Http2Error
+                    {
+                        StreamId = 0,
+                        Code = ErrorCode.ProtocolError,
+                        Message = "Frame is too small after substracting padding",
+                    };
+                }
+            }
+
+            // Check if the data frame exceeds the flow control window for the
+            // connection.
+            if (dataSize > connReceiveFlowWindow)
+            {
+                config.BufferPool.Return(dataBuffer);
+                return new Http2Error
+                {
+                    StreamId = 0,
+                    Code = ErrorCode.FlowControlError,
+                    Message = "Received window exceeded",
+                };
+            }
+            // Decrement the flow control window of the connection
+            connReceiveFlowWindow -= dataSize;
+            // And log the update
+            if (logger != null && logger.IsEnabled(LogLevel.Trace))
+            {
+                logger.LogTrace(
+                    "Incoming flow control window update:\n" +
+                    "  Connection window: {0} -> {1}\n",
+                    connReceiveFlowWindow + dataSize,
+                    connReceiveFlowWindow);
+            }
+
             StreamImpl stream = null;
             uint lastIncomingStreamId;
             uint lastOutgoingStreamId;
@@ -834,46 +931,22 @@ namespace Http2
             }
 
             Http2Error? processError = null;
-            int realDataSize = fh.Length;
-
+            bool streamTookBufferOwnership = false;
             if (stream != null)
             {
-                //Delegate processing of the DATA frame to the stream
-                var procResult = await stream.ProcessData(fh, inputStream, receiveBuffer);
-                processError = procResult.Error;
-                realDataSize = procResult.DataSize;
+                // Handover the data segment to the stream
+                processError = stream.PushBuffer(
+                    new ArraySegment<byte>(dataBuffer, offset, dataSize),
+                    (fh.Flags & (byte)DataFrameFlags.EndOfStream) != 0,
+                    out streamTookBufferOwnership);
             }
             else
             {
                 // The stream for which we received data does not exist :O
                 // Maybe because we have reset it.
-                // In this case we still need to read the data.
                 // The stream might also have never been established at all.
                 // This can't be exactly checked, since it's not tracked which
                 // streams were alive.
-
-                // Consume the data by reading it into our receiveBuffer
-                await inputStream.ReadAll(
-                    new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
-
-                // Check the most necessary things, e.g. if size is valid wrt padding
-                // and what is the real data size (necessary for window update).
-                if ((fh.Flags & (byte)DataFrameFlags.Padded) != 0)
-                {
-                    // Access is safe. Length 1 is checked before
-                    var padLen = receiveBuffer[0];
-                    realDataSize = fh.Length - 1 - padLen;
-                    if (realDataSize < 0)
-                    {
-                        return new Http2Error
-                        {
-                            StreamId = 0,
-                            Code = ErrorCode.ProtocolError,
-                            Message = "Frame is too small after substracting padding",
-                        };
-                    }
-                }
-
                 // Issue a stream error with error type StreamClosed if the
                 // streamId could be a valid one.
                 // Otherwise use a connection error.
@@ -887,40 +960,20 @@ namespace Http2
                 };
             }
 
+            // Release the frame which contains the data buffer if noone was
+            // interested in keeping it
+            if (!streamTookBufferOwnership)
+            {
+                config.BufferPool.Return(dataBuffer);
+            }
+            dataBuffer = null;
+
             // Check if we should send a window update for the connection
             // If we have encountered a connection error we will close anyway
             // and sending the update is not relevant
             if (processError.HasValue && processError.Value.StreamId == 0)
             {
                 return processError;
-            }
-
-            // Check if the data frame exceeds the flow control window for the
-            // connection.
-            // This yields a possible connection error, therefore this would
-            // overwrite an already happened stream error (that is irrelevant if
-            // the connection gets closed).
-            // This check executes AFTER the data has already been read.
-            // However that most likely won't hurt as, as the critical checks
-            // are for violations of the maximum frame size and the stream window.
-            if (realDataSize > connReceiveFlowWindow)
-            {
-                return new Http2Error
-                {
-                    StreamId = 0,
-                    Code = ErrorCode.FlowControlError,
-                    Message = "Received window exceeded",
-                };
-            }
-            // Decrement the flow control window of the connection
-            connReceiveFlowWindow -= realDataSize;
-            if (logger != null && logger.IsEnabled(LogLevel.Trace))
-            {
-                logger.LogTrace(
-                    "Incoming flow control window update:\n" +
-                    "  Connection window: {0} -> {1}\n",
-                    connReceiveFlowWindow + realDataSize,
-                    connReceiveFlowWindow);
             }
 
             var maxWindow = Constants.InitialConnectionWindowSize;
@@ -1004,6 +1057,7 @@ namespace Http2
             }
 
             // Read data from the unknown frame into the receive buffer
+            EnsureBuffer(fh.Length);
             await inputStream.ReadAll(
                 new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
 
@@ -1034,6 +1088,7 @@ namespace Http2
             }
 
             // Read data
+            EnsureBuffer(fh.Length);
             await inputStream.ReadAll(new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
 
             // Deserialize it
@@ -1332,6 +1387,7 @@ namespace Http2
                 }
 
                 // Receive the body of the SETTINGs frame
+                EnsureBuffer(fh.Length);
                 await inputStream.ReadAll(
                     new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
 

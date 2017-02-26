@@ -53,8 +53,41 @@ namespace Http2
         private long declaredInContentLength = -1;
         private long totalInData = 0;
 
-        private int receiveWindow; // Might be superficial since that info is also in RingBuf size
-        private RingBuf recvBuf;
+        private int totalReceiveWindow;
+        private int receiveWindow;
+
+        /// Intrusive linked list item for receive buffer queue
+        private class ReceiveQueueItem
+        {
+            public byte[] Buffer;
+            public int Offset;
+            public int Count;
+            public ReceiveQueueItem Next;
+
+            public ReceiveQueueItem(ArraySegment<byte> segment)
+            {
+                this.Buffer = segment.Array;
+                this.Offset = segment.Offset;
+                this.Count = segment.Count;
+            }
+        }
+
+        private ReceiveQueueItem receiveQueueHead = null;
+
+        private int ReceiveQueueLength
+        {
+            get
+            {
+                int len = 0;
+                var item = receiveQueueHead;
+                while (item != null)
+                {
+                    len += item.Count;
+                    item = item.Next;
+                }
+                return len;
+            }
+        }
 
         /// Reusable empty list of headers
         private static readonly HeaderField[] EmptyHeaders = new HeaderField[0];
@@ -75,7 +108,7 @@ namespace Http2
             // to send headers before doing anything.
             this.state = state;
             this.receiveWindow = receiveWindow;
-            this.recvBuf = new RingBuf(receiveWindow);
+            this.totalReceiveWindow = receiveWindow;
         }
 
         private async Task SendHeaders(
@@ -258,11 +291,15 @@ namespace Http2
                     return writeResetTask;
                 }
                 state = StreamState.Reset;
-                if (recvBuf != null)
+                var receiveQueueItem = receiveQueueHead;
+                while (receiveQueueItem != null)
                 {
-                    recvBuf.Dispose();
-                    recvBuf = null;
+                    connection.config.BufferPool.Return(receiveQueueItem.Buffer);
+                    var current = receiveQueueItem;
+                    receiveQueueItem = receiveQueueItem.Next;
+                    current.Next = null;
                 }
+                receiveQueueHead = null;
             }
 
             if (connection.logger != null)
@@ -337,19 +374,45 @@ namespace Http2
                     var streamClosedFromRemote =
                         state == StreamState.Closed || state == StreamState.HalfClosedRemote;
 
-                    if (recvBuf != null && recvBuf.Available > 0)
+                    if (receiveQueueHead != null)
                     {
-                        // Copy data from receive buffer to target
-                        var toCopy = Math.Min(recvBuf.Available, buffer.Count);
-                        recvBuf.Read(new ArraySegment<byte>(buffer.Array, buffer.Offset, toCopy));
+                        // Copy as much data as possible from internal queue into
+                        // user buffer
+                        var offset = buffer.Offset;
+                        var count = buffer.Count;
+                        while (receiveQueueHead != null && count > 0)
+                        {
+                            // Copy data from receive buffer to target
+                            var toCopy = Math.Min(receiveQueueHead.Count, count);
+                            Array.Copy(
+                                receiveQueueHead.Buffer, receiveQueueHead.Offset,
+                                buffer.Array, offset,
+                                toCopy);
+                            offset += toCopy;
+                            count -= toCopy;
+
+                            if (toCopy == receiveQueueHead.Count)
+                            {
+                                connection.config.BufferPool.Return(
+                                    receiveQueueHead.Buffer);
+                                receiveQueueHead = receiveQueueHead.Next;
+                            }
+                            else
+                            {
+                                receiveQueueHead.Offset += toCopy;
+                                receiveQueueHead.Count -= toCopy;
+                                break;
+                            }
+                        }
 
                         // Calculate whether we should send a window update frame
                         // after the read is complete.
                         // Only need to do this if the stream has not yet ended
                         if (!streamClosedFromRemote)
                         {
-                            var possibleWindowUpdate = recvBuf.Free - this.receiveWindow;
-                            if (possibleWindowUpdate >= (recvBuf.Capacity/2))
+                            var isFree = totalReceiveWindow - ReceiveQueueLength;
+                            var possibleWindowUpdate = isFree - receiveWindow;
+                            if (possibleWindowUpdate >= (totalReceiveWindow/2))
                             {
                                 windowUpdateAmount = possibleWindowUpdate;
                                 receiveWindow += windowUpdateAmount;
@@ -366,12 +429,12 @@ namespace Http2
                         }
 
                         result = new StreamReadResult{
-                            BytesRead = toCopy,
+                            BytesRead = offset - buffer.Offset,
                             EndOfStream = false,
                         };
                         hasResult = true;
 
-                        if (recvBuf.Available == 0 && !streamClosedFromRemote)
+                        if (receiveQueueHead == null && !streamClosedFromRemote)
                         {
                             // If all data was consumed the next read must be blocked
                             // until more data comes in or the stream gets closed or reset
@@ -386,14 +449,6 @@ namespace Http2
                             EndOfStream = true,
                         };
                         hasResult = true;
-
-                        if (recvBuf != null)
-                        {
-                            // The stream was closed, which means no more data will follow
-                            // In this case we can dispose the receive buffer.
-                            recvBuf.Dispose();
-                            recvBuf = null;
-                        }
                     }
                 }
 
@@ -752,58 +807,17 @@ namespace Http2
             return null;
         }
 
-        /// <summary>Result of the ProcessData operation</summary>
-        public class ProcessDataResult
-        {
-            public Http2Error? Error;
-            public int DataSize;
-        }
-
         /// <summary>
         /// Processes the reception of a DATA frame.
         /// The connection is responsible for checking the maximum frame length
         /// before calling this function.
         /// </summary>
-        public async ValueTask<ProcessDataResult> ProcessData(
-            FrameHeader dataHeader,
-            IReadableByteStream inputStream,
-            byte[] tempBuf)
+        public Http2Error? PushBuffer(
+            ArraySegment<byte> buffer,
+            bool endOfStream,
+            out bool tookBufferOwnership)
         {
-            // TODO: Actually we should read the data directly into the RingBuf
-            // However as async reads therein are not supported we read it in the
-            // temp buffer and copy it into the RingBuf later on.
-            // Remark: The data always has to be consumed, even if the stream is
-            // reset. Otherwise the remaining protocol framing would be broken.
-            await inputStream.ReadAll(
-                new ArraySegment<byte>(tempBuf, 0, dataHeader.Length));
-
-            // Checkout the real data content
-            var offset = 0;
-            var length = dataHeader.Length;
-            var flags = (DataFrameFlags)dataHeader.Flags;
-            if (flags.HasFlag(DataFrameFlags.Padded))
-            {
-                var padLen = tempBuf[0]; // Access is safe. Length 1 is checked before
-                offset++;
-                length--;
-                length -= padLen;
-
-                if (length < 0)
-                {
-                    return new ProcessDataResult
-                    {
-                        DataSize = 0,
-                        Error = new Http2Error
-                        {
-                            StreamId = 0, // This is a connection error
-                            Code = ErrorCode.ProtocolError,
-                            Message = "Frame is too small after substracting padding",
-                        }
-                    };
-                }
-            }
-
-            var contentSegment = new ArraySegment<byte>(tempBuf, offset, length);
+            tookBufferOwnership = false;
             var wakeupDataWaiter = false;
             var wakeupTrailerWaiter = false;
             var removeStream = false;
@@ -822,83 +836,82 @@ namespace Http2
                         throw new NotImplementedException();
                     case StreamState.Open:
                     case StreamState.HalfClosedLocal:
-                        if (! headersReceived)
+                        if (!headersReceived)
                         {
                             // Received DATA without HEADERS before.
                             // State Open can also mean we only have sent
                             // headers but not received them.
                             // Therefore checking the state alone isn't sufficient.
-                            return new ProcessDataResult
+                            return new Http2Error
                             {
-                                DataSize = length,
-                                Error = new Http2Error
-                                {
-                                    StreamId = Id,
-                                    Code = ErrorCode.ProtocolError,
-                                    Message = "Received data before headers",
-                                }
+                                StreamId = Id,
+                                Code = ErrorCode.ProtocolError,
+                                Message = "Received data before headers",
                             };
                         }
 
-                        // Check if the flow control window is exceeded
-                        // TODO: In case length == 0 we might omit some changes
-                        // E.g. in order to handle empty frames which close the
-                        // stream even in cases where the window is zero or even
-                        // negative. In the moment there is no problem, since the
-                        // lowest window is 0, and therefore 0 length data frames
-                        // are accepted.
-                        if (length > receiveWindow)
+                        // Only enqueue DATA frames with a real content length
+                        // of at least 1 byte, otherwise the reader is needlessly
+                        // woken up.
+                        // Empty DATA frames are also not checked against the
+                        // flow control window, which means they are valid even
+                        // in case of a negative flow control window (which is
+                        // not possible in the current state of the implementation).
+                        // However we still treat empty DATA frames as a valid
+                        // separator between HEADERS and trailing HEADERS.
+                        if (buffer.Count > 0)
                         {
-                            return new ProcessDataResult
+                            // Check if the flow control window is exceeded
+                            if (buffer.Count > receiveWindow)
                             {
-                                DataSize = length,
-                                Error = new Http2Error
+                                return new Http2Error
                                 {
                                     StreamId = Id,
                                     Code = ErrorCode.FlowControlError,
                                     Message = "Received window exceeded",
-                                }
-                            };
-                        }
-                        if (connection.logger != null &&
-                            connection.logger.IsEnabled(LogLevel.Trace))
-                        {
-                            connection.logger.LogTrace(
-                                "Incoming flow control window update:\n" +
-                                "  Stream {0} window: {1} -> {2}",
-                                Id, receiveWindow, receiveWindow - length);
-                        }
-                        receiveWindow -= length;
+                                };
+                            }
+                            if (connection.logger != null &&
+                                connection.logger.IsEnabled(LogLevel.Trace))
+                            {
+                                connection.logger.LogTrace(
+                                    "Incoming flow control window update:\n" +
+                                    "  Stream {0} window: {1} -> {2}",
+                                    Id, receiveWindow, receiveWindow - buffer.Count);
+                            }
+                            receiveWindow -= buffer.Count;
 
-                        // Copy the data
-                        recvBuf.Write(contentSegment);
+                            // Enqueue the data at the end of the receive queue
+                            // TODO: Check that 0 byte buffers get freed immediatly
+                            // (the data part might contain padding)
+                            var newItem = new ReceiveQueueItem(buffer);
+                            EnqueueReceiveQueueItem(newItem);
+                            wakeupDataWaiter = true;
+                            tookBufferOwnership = true;
+                        }
+                        // Allow trailing headers afterwards
                         dataReceived = true;
 
                         // Check if data matches declared content-length
                         // TODO: What should be done if the declared
                         // content-length was invalid (-2)?
-                        totalInData += length;
-                        if (dataHeader.HasEndOfStreamFlag &&
+                        totalInData += buffer.Count;
+                        if (endOfStream &&
                             declaredInContentLength >= 0 &&
                             declaredInContentLength != totalInData)
                         {
-                            return new ProcessDataResult
+                            return new Http2Error
                             {
-                                DataSize = length,
-                                Error = new Http2Error
-                                {
-                                    StreamId = Id,
-                                    Code = ErrorCode.ProtocolError,
-                                    Message =
-                                        "Length of DATA frames does not match content-length",
-                                }
+                                StreamId = Id,
+                                Code = ErrorCode.ProtocolError,
+                                Message =
+                                    "Length of DATA frames does not match content-length",
                             };
                         }
 
                         // All checks OK so far, wakeup waiter and handle state changes
-                        wakeupDataWaiter = true;
                         // Handle state changes that are caused by DATA frames
-                        if (dataHeader.HasEndOfStreamFlag)
+                        if (endOfStream)
                         {
                             if (state == StreamState.HalfClosedLocal)
                             {
@@ -910,6 +923,7 @@ namespace Http2
                                 state = StreamState.HalfClosedRemote;
                             }
                             wakeupTrailerWaiter = true;
+                            wakeupDataWaiter = true;
                         }
                         break;
                     case StreamState.Idle:
@@ -918,15 +932,11 @@ namespace Http2
                         // Received a DATA frame for a stream that was
                         // already closed or not properly opened from remote side.
                         // That's not valid
-                        return new ProcessDataResult
+                        return new Http2Error
                         {
-                            DataSize = length,
-                            Error = new Http2Error
-                            {
-                                StreamId = Id,
-                                Code = ErrorCode.StreamClosed,
-                                Message = "Received data for closed stream",
-                            }
+                            StreamId = Id,
+                            Code = ErrorCode.StreamClosed,
+                            Message = "Received data for closed stream",
                         };
                     case StreamState.Reset:
                         // The stream was already reset
@@ -957,11 +967,29 @@ namespace Http2
                 connection.UnregisterStream(this);
             }
 
-            return new ProcessDataResult
+            return null;
+        }
+
+        /// <summary>
+        /// Enqueues a new item at the end of the receive queue
+        /// </summary>
+        private void EnqueueReceiveQueueItem(ReceiveQueueItem newItem)
+        {
+            if (receiveQueueHead == null)
             {
-                DataSize = length,
-                Error = null,
-            };
+                receiveQueueHead = newItem;
+            }
+            else
+            {
+                var current = receiveQueueHead;
+                var next = receiveQueueHead.Next;
+                while (next != null)
+                {
+                    current = next;
+                    next = current.Next;
+                }
+                current.Next = newItem;
+            }
         }
     }
 }
