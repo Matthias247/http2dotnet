@@ -101,6 +101,7 @@ class Program
             new ConnectionConfigurationBuilder(isServer: true)
             .UseStreamListener(AcceptIncomingStream)
             .UseHuffmanStrategy(HuffmanStrategy.Never)
+            .UseBufferPool(Buffers.Pool)
             .Build();
 
         while (true)
@@ -127,13 +128,16 @@ class Program
     }
 }
 
+public static class Buffers
+{
+    public static ArrayPool<byte> Pool = ArrayPool<byte>.Shared;
+}
+
 public static class RequestUtils
 {
-    private static ArrayPool<byte> bufferPool = ArrayPool<byte>.Shared;
-
     public async static Task DrainAsync(this IReadableByteStream stream)
     {
-        var buf = bufferPool.Rent(8*1024);
+        var buf = Buffers.Pool.Rent(8*1024);
         var bytesRead = 0;
 
         try
@@ -154,7 +158,7 @@ public static class RequestUtils
         }
         finally
         {
-            bufferPool.Return(buf);
+            Buffers.Pool.Return(buf);
         }
     }
 
@@ -162,7 +166,7 @@ public static class RequestUtils
         this IReadableByteStream stream,
         IWriteableByteStream dest)
     {
-        var buf = bufferPool.Rent(8*1024);
+        var buf = Buffers.Pool.Rent(8*1024);
         var bytesRead = 0;
 
         try
@@ -184,7 +188,7 @@ public static class RequestUtils
         }
         finally
         {
-            bufferPool.Return(buf);
+            Buffers.Pool.Return(buf);
         }
     }
 }

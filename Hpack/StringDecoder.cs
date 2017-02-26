@@ -16,8 +16,6 @@ namespace Http2.Hpack
             DecodeData,
         }
 
-        private static ArrayPool<byte> _pool = ArrayPool<byte>.Shared;
-
         /// <summary>The result of the decode operation</summary>
         public string Result;
         /// <summary>The length of the decoded string</summary>
@@ -46,20 +44,31 @@ namespace Http2.Hpack
         private int _maxLength;
         /// <summary>Decoder for the string length</summary>
         private IntDecoder _lengthDecoder = new IntDecoder();
+        /// <summary>
+        /// The pool from which temporary buffers for string decoding should
+        /// be rented
+        /// </summary>
+        private ArrayPool<byte> _bufferPool;
 
-        public StringDecoder(int maxLength)
+
+        public StringDecoder(
+            int maxLength, ArrayPool<byte> bufferPool)
         {
             if (maxLength < 1) throw new ArgumentException(nameof(maxLength));
-            this._maxLength = maxLength;
+            if (bufferPool == null) throw new ArgumentException(nameof(bufferPool));
+            _maxLength = maxLength;
+            _bufferPool = bufferPool;
         }
 
         public void Dispose()
         {
             if (_stringBuffer != null)
             {
-                _pool.Return(_stringBuffer);
+                _bufferPool.Return(_stringBuffer);
                 _stringBuffer = null;
             }
+
+            _bufferPool = null;
         }
 
         public int Decode(ArraySegment<byte> buf)
@@ -71,7 +80,7 @@ namespace Http2.Hpack
             // Should normally not happen.
             if (_stringBuffer != null)
             {
-                _pool.Return(_stringBuffer);
+                _bufferPool.Return(_stringBuffer);
                 _stringBuffer = null;
             }
 
@@ -89,7 +98,7 @@ namespace Http2.Hpack
                 if (len > this._maxLength)
                     throw new Exception("Maximum string length exceeded");
                 this._octetLength = len;
-                this._stringBuffer = _pool.Rent(this._octetLength);
+                this._stringBuffer = _bufferPool.Rent(this._octetLength);
                 this._bufferOffset = 0;
                 this._state = State.DecodeData;
                 consumed += this.DecodeCont(new ArraySegment<byte>(buf.Array, offset, length));
@@ -117,7 +126,7 @@ namespace Http2.Hpack
                 if (len > this._maxLength)
                     throw new Exception("Maximum string length exceeded");
                 this._octetLength = len;
-                this._stringBuffer = _pool.Rent(this._octetLength);
+                this._stringBuffer = _bufferPool.Rent(this._octetLength);
                 this._bufferOffset = 0;
                 this._state = State.DecodeData;
             }
@@ -156,7 +165,7 @@ namespace Http2.Hpack
                 if (this._huffman)
                 {
                     // We need to perform huffman decoding
-                    this.Result = Huffman.Decode(view);
+                    this.Result = Huffman.Decode(view, _bufferPool);
                 }
                 else
                 {
@@ -172,7 +181,7 @@ namespace Http2.Hpack
                 this.StringLength = this.Result.Length;
                 this._state = State.StartDecode;
 
-                _pool.Return(this._stringBuffer);
+                _bufferPool.Return(this._stringBuffer);
                 this._stringBuffer = null;
             }
             // Else we need more input data

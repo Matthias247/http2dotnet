@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 
 namespace Http2.Hpack
@@ -29,6 +30,12 @@ namespace Http2.Hpack
             /// The maximum length for received strings
             /// </summary>
             public int? MaxStringLength;
+
+            /// <summary>
+            /// The buffer pool from which buffers should be rented for string
+            /// decoding.
+            /// </summary>
+            public ArrayPool<byte> BufferPool;
         }
 
         private enum TaskType
@@ -135,6 +142,7 @@ namespace Http2.Hpack
             var dynamicTableSize = Defaults.DynamicTableSize;
             this._dynamicTableSizeLimit = Defaults.DynamicTableSizeLimit;
             var maxStringLength = Defaults.MaxStringLength;
+            ArrayPool<byte> bufferPool = null;
 
             if (options.HasValue)
             {
@@ -151,9 +159,18 @@ namespace Http2.Hpack
                 {
                     maxStringLength = opts.MaxStringLength.Value;
                 }
+                if (opts.BufferPool != null)
+                {
+                    bufferPool = opts.BufferPool;
+                }
             }
 
-            this._stringDecoder = new StringDecoder(maxStringLength);
+            if (bufferPool == null)
+            {
+                bufferPool = ArrayPool<byte>.Shared;
+            }
+
+            this._stringDecoder = new StringDecoder(maxStringLength, bufferPool);
 
             if (dynamicTableSize > this._dynamicTableSizeLimit)
                 throw new ArgumentException("Dynamic table size must not exceeded limit");

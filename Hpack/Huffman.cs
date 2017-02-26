@@ -6,29 +6,29 @@ namespace Http2.Hpack
 {
     public class Huffman
     {
-        private static ArrayPool<byte> _pool = ArrayPool<byte>.Shared;
-
         /// <summary>
         /// Resizes a buffer by allocating a new one and copying usedBytes from
         /// the old to the new buffer.
         /// </summary>
         private static void ResizeBuffer(
-            ref byte[] outBuf, int usedBytes, int newBytes)
+            ref byte[] outBuf, int usedBytes, int newBytes,
+            ArrayPool<byte> pool)
         {
             var newSize = outBuf.Length + newBytes;
-            var newBuf = _pool.Rent(newSize);
+            var newBuf = pool.Rent(newSize);
             Array.Copy(outBuf, 0, newBuf, 0, usedBytes);
-            _pool.Return(outBuf);
+            pool.Return(outBuf);
             outBuf = newBuf;
         }
 
-        public static string Decode(ArraySegment<byte> input)
+        public static string Decode(ArraySegment<byte> input, ArrayPool<byte> pool)
         {
+            // TODO: Check here if buffer is correctly returned to pool in error cases
             var byteCount = 0;
             // Estimate a buffer length - might need more depending on coding factor
             var estLength = (input.Count * 3 + 1) / 2;
 
-            var outBuf = _pool.Rent(estLength);
+            var outBuf = pool.Rent(estLength);
 
             // Offsets for decoding
             var inputByteOffset = 0;
@@ -61,7 +61,7 @@ namespace Http2.Hpack
 
                     if (treeNode == null)
                     {
-                        _pool.Return(outBuf);
+                        pool.Return(outBuf);
                         throw new Exception("Invalid huffman code");
                     }
 
@@ -74,7 +74,9 @@ namespace Http2.Hpack
                             {
                                 // No more space - resize first
                                 var unprocessedBytes = input.Count - inputByteOffset;
-                                ResizeBuffer(ref outBuf, byteCount, 2*unprocessedBytes);
+                                ResizeBuffer(
+                                    ref outBuf, byteCount, 2*unprocessedBytes,
+                                    pool);
                             }
                             outBuf[byteCount] = (byte)treeNode.Value;
                             byteCount++;
@@ -87,7 +89,7 @@ namespace Http2.Hpack
                             // EOS symbol
                             // Fully receiving this is a decoding error,
                             // because padding must not be longer than 7 bits
-                            _pool.Return(outBuf);
+                            pool.Return(outBuf);
                             throw new Exception("Encountered EOS in huffman code");
                         }
                     }
@@ -110,7 +112,7 @@ namespace Http2.Hpack
             // Convert the buffer into a string
             // TODO: Check if encoding is really correct
             var str = Encoding.ASCII.GetString(outBuf, 0, byteCount);
-            _pool.Return(outBuf);
+            pool.Return(outBuf);
             return str;
         }
 

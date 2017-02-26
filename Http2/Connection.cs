@@ -184,6 +184,7 @@ namespace Http2
                     // makes no sense, as the remote expects the default size
                     // at start
                     DynamicTableSizeLimit = (int)dynTableSizeLimit,
+                    BufferPool = config.BufferPool,
                 }),
                 localSettings.MaxFrameSize,
                 localSettings.MaxHeaderListSize,

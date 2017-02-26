@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using Xunit;
 using Http2.Hpack;
 
@@ -9,7 +10,7 @@ namespace HpackTests
         [Fact]
         public void ShouldDecodeAnASCIIStringFromACompleteBuffer()
         {
-            StringDecoder Decoder = new StringDecoder(1024);
+            StringDecoder Decoder = new StringDecoder(1024, ArrayPool<byte>.Shared);
 
             // 0 Characters
             var buf = new Buffer();
@@ -55,7 +56,7 @@ namespace HpackTests
         [Fact]
         public void ShouldDecodeAnASCIIStringIfPayloadIsInMultipleBuffers()
         {
-            StringDecoder Decoder = new StringDecoder(1024);
+            StringDecoder Decoder = new StringDecoder(1024, ArrayPool<byte>.Shared);
 
             // Only put the prefix in the first byte
             var buf = new Buffer();
@@ -91,7 +92,7 @@ namespace HpackTests
         [Fact]
         public void ShouldDecodeAHuffmanEncodedStringIfLengthAndPayloadAreInMultipleBuffers()
         {
-            StringDecoder Decoder = new StringDecoder(1024);
+            StringDecoder Decoder = new StringDecoder(1024, ArrayPool<byte>.Shared);
 
             // Only put the prefix in the first byte
             var buf = new Buffer();
@@ -139,7 +140,7 @@ namespace HpackTests
         [Fact]
         public void ShouldCheckTheMaximumStringLength()
         {
-            StringDecoder Decoder = new StringDecoder(2);
+            StringDecoder Decoder = new StringDecoder(2, ArrayPool<byte>.Shared);
 
             // 2 Characters are ok
             var buf = new Buffer();
