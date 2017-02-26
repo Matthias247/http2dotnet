@@ -211,7 +211,7 @@ namespace Http2
 
         internal void ReleaseBuffer(int treshold)
         {
-            if (receiveBuffer == null || receiveBuffer.Length < treshold) return;
+            if (receiveBuffer == null || receiveBuffer.Length <= treshold) return;
             config.BufferPool.Return(receiveBuffer);
             receiveBuffer = null;
         }
