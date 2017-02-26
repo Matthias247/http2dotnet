@@ -130,7 +130,7 @@ class Program
 
 public static class Buffers
 {
-    public static ArrayPool<byte> Pool = ArrayPool<byte>.Shared;
+    public static ArrayPool<byte> Pool = ArrayPool<byte>.Create(64*1024, 200);
 }
 
 public static class RequestUtils

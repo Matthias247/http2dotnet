@@ -7,10 +7,12 @@ namespace HpackTests
 {
     public class StringDecoderTests
     {
+        private ArrayPool<byte> bufPool = ArrayPool<byte>.Shared;
+
         [Fact]
         public void ShouldDecodeAnASCIIStringFromACompleteBuffer()
         {
-            StringDecoder Decoder = new StringDecoder(1024, ArrayPool<byte>.Shared);
+            StringDecoder Decoder = new StringDecoder(1024, bufPool);
 
             // 0 Characters
             var buf = new Buffer();
@@ -56,7 +58,7 @@ namespace HpackTests
         [Fact]
         public void ShouldDecodeAnASCIIStringIfPayloadIsInMultipleBuffers()
         {
-            StringDecoder Decoder = new StringDecoder(1024, ArrayPool<byte>.Shared);
+            StringDecoder Decoder = new StringDecoder(1024, bufPool);
 
             // Only put the prefix in the first byte
             var buf = new Buffer();
@@ -92,7 +94,7 @@ namespace HpackTests
         [Fact]
         public void ShouldDecodeAHuffmanEncodedStringIfLengthAndPayloadAreInMultipleBuffers()
         {
-            StringDecoder Decoder = new StringDecoder(1024, ArrayPool<byte>.Shared);
+            StringDecoder Decoder = new StringDecoder(1024, bufPool);
 
             // Only put the prefix in the first byte
             var buf = new Buffer();
@@ -140,7 +142,7 @@ namespace HpackTests
         [Fact]
         public void ShouldCheckTheMaximumStringLength()
         {
-            StringDecoder Decoder = new StringDecoder(2, ArrayPool<byte>.Shared);
+            StringDecoder Decoder = new StringDecoder(2, bufPool);
 
             // 2 Characters are ok
             var buf = new Buffer();
