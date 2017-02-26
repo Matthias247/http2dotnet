@@ -882,8 +882,12 @@ namespace Http2
                             receiveWindow -= buffer.Count;
 
                             // Enqueue the data at the end of the receive queue
-                            // TODO: Check that 0 byte buffers get freed immediatly
-                            // (the data part might contain padding)
+                            // TODO: Instead of appending buffers with only small
+                            // content on the end of each other we might to concat
+                            // the buffers together, which avoids the worst-case
+                            // scenario: The remote side sending us lots of 1byte
+                            // DATA frames, where we need a queue item for each
+                            // one.
                             var newItem = new ReceiveQueueItem(buffer);
                             EnqueueReceiveQueueItem(newItem);
                             wakeupDataWaiter = true;
