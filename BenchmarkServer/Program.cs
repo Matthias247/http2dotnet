@@ -166,7 +166,7 @@ public static class RequestUtils
         this IReadableByteStream stream,
         IWriteableByteStream dest)
     {
-        var buf = Buffers.Pool.Rent(8*1024);
+        var buf = Buffers.Pool.Rent(64*1024);
         var bytesRead = 0;
 
         try
