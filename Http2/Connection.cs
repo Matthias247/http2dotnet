@@ -897,28 +897,35 @@ namespace Http2
                 }
             }
 
-            // Check if the data frame exceeds the flow control window for the
-            // connection.
-            if (dataSize > connReceiveFlowWindow)
+            if (dataSize != 0)
             {
-                config.BufferPool.Return(dataBuffer);
-                return new Http2Error
+                // Check if the data frame exceeds the flow control window for
+                // the connection. This can be safely checked in the dataSize != 0
+                // block since the connection flow control window can never be
+                // negative. The dataSize != 0 check avoids logging a flow 
+                // control window change when non happened.
+                if (dataSize > connReceiveFlowWindow)
                 {
-                    StreamId = 0,
-                    Code = ErrorCode.FlowControlError,
-                    Message = "Received window exceeded",
-                };
-            }
-            // Decrement the flow control window of the connection
-            connReceiveFlowWindow -= dataSize;
-            // And log the update
-            if (logger != null && logger.IsEnabled(LogLevel.Trace))
-            {
-                logger.LogTrace(
-                    "Incoming flow control window update:\n" +
-                    "  Connection window: {0} -> {1}\n",
-                    connReceiveFlowWindow + dataSize,
-                    connReceiveFlowWindow);
+                    config.BufferPool.Return(dataBuffer);
+                    return new Http2Error
+                    {
+                        StreamId = 0,
+                        Code = ErrorCode.FlowControlError,
+                        Message = "Received window exceeded",
+                    };
+                }
+
+                // Decrement the flow control window of the connection
+                connReceiveFlowWindow -= dataSize;
+                // And log the update
+                if (logger != null && logger.IsEnabled(LogLevel.Trace))
+                {
+                    logger.LogTrace(
+                        "Incoming flow control window update:\n" +
+                        "  Connection window: {0} -> {1}\n",
+                        connReceiveFlowWindow + dataSize,
+                        connReceiveFlowWindow);
+                }
             }
 
             StreamImpl stream = null;
