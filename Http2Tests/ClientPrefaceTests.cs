@@ -73,28 +73,28 @@ namespace Http2Tests
         [Fact]
         public async Task ShouldErrorIfPrefaceWasNotReceivedUntilTimeout()
         {
-            var timout = 50;
+            var timeout = 50;
             var pipe = new BufferedPipe(50);
             await Assert.ThrowsAsync<TimeoutException>(
-                () => ClientPreface.ReadAsync(pipe, timout).AsTask());
+                () => ClientPreface.ReadAsync(pipe, timeout).AsTask());
         }
 
         [Fact]
         public async Task ShouldNotErrorIfPrefaceWasReceivedWithinTimeout()
         {
-            var timout = 100;
+            var timeout = 100;
             var pipe = new BufferedPipe(50);
             var _ = Task.Run(async () =>
             {
                 await pipe.WriteAsync(new ArraySegment<byte>(ClientPreface.Bytes));
             });
-            await ClientPreface.ReadAsync(pipe, timout);
+            await ClientPreface.ReadAsync(pipe, timeout);
         }
 
         [Fact]
         public async Task ShouldErrorIfStreamWasClosedWithinTimeout()
         {
-            var timout = 100;
+            var timeout = 100;
             var pipe = new BufferedPipe(50);
             var _ = Task.Run(async () =>
             {
@@ -102,7 +102,7 @@ namespace Http2Tests
                 await pipe.CloseAsync();
             });
             var ex = await Assert.ThrowsAsync<AggregateException>(
-                () => ClientPreface.ReadAsync(pipe, timout).AsTask());
+                () => ClientPreface.ReadAsync(pipe, timeout).AsTask());
             Assert.IsType<EndOfStreamException>(ex.InnerException);
         }
     }

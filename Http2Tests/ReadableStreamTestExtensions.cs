@@ -35,6 +35,7 @@ namespace Http2Tests
             var done = await combined;
             if (done == readTask)
             {
+                await readTask;
                 return;
             }
             throw new TimeoutException();
