@@ -291,15 +291,11 @@ namespace Http2
                     return writeResetTask;
                 }
                 state = StreamState.Reset;
-                var receiveQueueItem = receiveQueueHead;
-                while (receiveQueueItem != null)
-                {
-                    connection.config.BufferPool.Return(receiveQueueItem.Buffer);
-                    var current = receiveQueueItem;
-                    receiveQueueItem = receiveQueueItem.Next;
-                    current.Next = null;
-                }
+
+                // Free the receive queue
+                var head = receiveQueueHead;
                 receiveQueueHead = null;
+                FreeReceiveQueue(head);
             }
 
             if (connection.logger != null)
@@ -993,6 +989,21 @@ namespace Http2
                     next = current.Next;
                 }
                 current.Next = newItem;
+            }
+        }
+
+        /// <summary>
+        /// Frees a linked list of receive queue buffers.
+        /// </summary>
+        private void FreeReceiveQueue(ReceiveQueueItem item)
+        {
+            while (item != null && item.Buffer != null)
+            {
+                connection.config.BufferPool.Return(item.Buffer);
+                item.Buffer = null;
+                var current = item;
+                item = item.Next;
+                current.Next = null;
             }
         }
     }
