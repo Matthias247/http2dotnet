@@ -82,7 +82,7 @@ namespace Http2Tests
         [Fact]
         public async Task ShouldNotErrorIfPrefaceWasReceivedWithinTimeout()
         {
-            var timeout = 100;
+            var timeout = 200;
             var pipe = new BufferedPipe(50);
             var _ = Task.Run(async () =>
             {
@@ -94,7 +94,7 @@ namespace Http2Tests
         [Fact]
         public async Task ShouldErrorIfStreamWasClosedWithinTimeout()
         {
-            var timeout = 100;
+            var timeout = 200;
             var pipe = new BufferedPipe(50);
             var _ = Task.Run(async () =>
             {

@@ -428,41 +428,28 @@ namespace Http2Tests
         }
 
         [Theory]
-        [InlineData(0, 0)]
-        [InlineData(1, 0)]
-        [InlineData(0, 1024)]
-        [InlineData(1, 1024)]
-        [InlineData(255, 0)]
-        [InlineData(255, 1024)]
+        [InlineData(20, 0, 0)]
+        [InlineData(20, 1, 0)]
+        [InlineData(20, 0, 1024)]
+        [InlineData(20, 1, 1024)]
+        [InlineData(20, 255, 0)]
+        [InlineData(20, 255, 1024)]
+        [InlineData(5, 255, 64*1024 - 1)]
         public async Task DataFramesWithPaddingShouldBeCorrectlyReceived(
-            byte numPadding, int bytesToSend)
+            int nrFrames, byte numPadding, int bytesToSend)
         {
-            var inPipe = new BufferedPipe(1024);
-            var outPipe = new BufferedPipe(1024);
-            var receiveOk = false;
+            var inPipe = new BufferedPipe(10*1024);
+            var outPipe = new BufferedPipe(10*1024);
+            var receiveOk = true;
 
+            var settings = Settings.Default;
+            settings.MaxFrameSize = 100 * 1024;
+            settings.InitialWindowSize = int.MaxValue;
             var r = await StreamCreator.CreateConnectionAndStream(
-                StreamState.Open, loggerProvider, inPipe, outPipe);
+                StreamState.Open, loggerProvider, inPipe, outPipe,
+                localSettings: settings);
 
-            var readTask = Task.Run(async () =>
-            {
-                for (var nrSends = 0; nrSends < 2; nrSends++)
-                {
-                    var buf1 = new byte[bytesToSend];
-                    await r.stream.ReadAllWithTimeout(new ArraySegment<byte>(buf1));
-                    var expected = 0;
-                    for (var j = 0; j < bytesToSend; j++)
-                    {
-                        if (buf1[j] != expected) return;
-                        expected++;
-                        if (expected > 123) expected = 0;
-                    }
-                }
-                // Received everything and everything was like expected
-                receiveOk = true;
-            });
-
-            for (var nrSends = 0; nrSends < 2; nrSends++)
+            for (var nrSends = 0; nrSends < nrFrames; nrSends++)
             {
                 var buf = new byte[1 + bytesToSend + numPadding];
                 buf[0] = numPadding;
@@ -481,11 +468,24 @@ namespace Http2Tests
                     Length = buf.Length,
                 };
                 await inPipe.WriteFrameHeaderWithTimeout(fh);
-                await inPipe.WriteAsync(new ArraySegment<byte>(buf));
+                await inPipe.WriteWithTimeout(new ArraySegment<byte>(buf));
             }
 
-            var doneTask = await Task.WhenAny(readTask, Task.Delay(250));
-            Assert.True(readTask == doneTask, "Expected read task to finish");
+            for (var nrSends = 0; nrSends < nrFrames; nrSends++)
+            {
+                var buf1 = new byte[bytesToSend];
+                await r.stream.ReadAllWithTimeout(new ArraySegment<byte>(buf1));
+                var expected = 0;
+                for (var j = 0; j < bytesToSend; j++)
+                {
+                    if (buf1[j] != expected) {
+                        receiveOk = false;
+                    }
+                    expected++;
+                    if (expected > 123) expected = 0;
+                }
+            }
+
             Assert.True(receiveOk, "Expected to receive correct data");
         }
 
