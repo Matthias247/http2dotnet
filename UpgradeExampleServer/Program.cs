@@ -201,7 +201,7 @@ class Program
                 var headers = new List<HeaderField>();
                 headers.Add(new HeaderField{Name=":method", Value=request.Method});
                 headers.Add(new HeaderField{Name=":path", Value=request.Path});
-                headers.Add(new HeaderField{Name=":scheme", Value=request.Protocol});
+                headers.Add(new HeaderField{Name=":scheme", Value="http"});
                 foreach (var kvp in request.Headers)
                 {
                     // Skip Connection upgrade related headers
