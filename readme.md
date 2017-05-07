@@ -256,8 +256,6 @@ Current limitations
 The library currently faces the following limitations:
 - Missing support for creating streams from client side.
 - Missing support for the push promises.
-- Missing support for using base64 encoded SETTINGS data in case of connection
-  upgrade from HTTP/1.1. This currently doesn't allow the h2c upgrade mechanism.
 - Missing support for reading the remote SETTINGS from application side.
 - The scheduling of outgoing DATA frames is very basic and relies mostly on flow
   control windows and the maximum supported frame size. It is currently not
