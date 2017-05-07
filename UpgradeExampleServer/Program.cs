@@ -27,8 +27,29 @@ class Program
         return true;
     }
 
+    static byte[] UpgradeSuccessResponse = Encoding.ASCII.GetBytes(
+        "HTTP/1.1 101 Switching Protocols\r\n" +
+        "Connection: Upgrade\r\n" +
+        "Upgrade: h2c\r\n\r\n");
+
+    static byte[] UpgradeErrorResponse = Encoding.ASCII.GetBytes(
+        "HTTP/1.1 400 Bad request\r\n\r\n");
+
     static byte[] responseBody = Encoding.ASCII.GetBytes(
         "<html><head>Hello World</head><body>Content</body></html>");
+
+    static byte[] http2Start = Encoding.ASCII.GetBytes(
+        "PRI * HTTP/2.0\r\n\r\n");
+
+    static bool MaybeHttpStart(ArraySegment<byte> bytes)
+    {
+        if (bytes == null || bytes.Count != http2Start.Length) return false;
+        for (var i = 0; i < http2Start.Length; i++)
+        {
+            if (bytes.Array[bytes.Offset+i] != http2Start[i]) return false;
+        }
+        return true;
+    }
 
     static async void HandleIncomingStream(IStream stream)
     {
@@ -68,14 +89,6 @@ class Program
             stream.Cancel();
         }
     }
-
-    static byte[] UpgradeSuccessResponse = Encoding.ASCII.GetBytes(
-        "HTTP/1.1 101 Switching Protocols\r\n" +
-        "Connection: Upgrade\r\n" +
-        "Upgrade: h2c\r\n\r\n");
-
-    static byte[] UpgradeErrorResponse = Encoding.ASCII.GetBytes(
-        "HTTP/1.1 400 Bad request\r\n\r\n");
 
     static async Task AcceptTask(TcpListener listener, ILoggerProvider logProvider)
     {
@@ -123,18 +136,43 @@ class Program
         IWriteAndCloseableByteStream outputStream,
         int connectionId)
     {
-        if (useUpgrade)
+        var upgradeReadStream = new UpgradeReadStream(inputStream);
+        ServerUpgradeRequest upgrade = null;
+        try
         {
-            var upgradeReadStream = new UpgradeReadStream(inputStream);
-            ServerUpgradeRequest upgrade;
-            try
+            // Wait for either HTTP/1 upgrade header or HTTP/2 magic header
+            await upgradeReadStream.WaitForHttpHeader();
+            var headerBytes = upgradeReadStream.HeaderBytes;
+            if (MaybeHttpStart(headerBytes))
             {
-                var headerStr = await upgradeReadStream.ReadHttpHeader();
-                var request = RequestHeader.ParseFrom(headerStr);
+                // This seems to be a HTTP/2 request
+                // No upgrade necessary
+                // Make the header rereadable by the stream reader consumer,
+                // so that the library can also read the preface
+                upgradeReadStream.UnreadHttpHeader();
+            }
+            else
+            {
+                // This seems to be a HTTP/1 request
+                // Parse the header and check whether it's an upgrade
+                var request = RequestHeader.ParseFrom(
+                    Encoding.ASCII.GetString(
+                        headerBytes.Array, headerBytes.Offset, headerBytes.Count-4));
+                // Assure that the HTTP/2 library does not get passed the HTTP/1 request
+                upgradeReadStream.ConsumeHttpHeader();
 
-                if (!(request.Method == "GET" || request.Method == "OPTIONS") ||
-                    request.Protocol != "HTTP/1.1")
+                if (request.Protocol != "HTTP/1.1")
                     throw new Exception("Invalid upgrade request");
+
+                // If the request has some payload we can't process it in this demo
+                string contentLength;
+                if (request.Headers.TryGetValue("content-length", out contentLength))
+                {
+                    await outputStream.WriteAsync(
+                        new ArraySegment<byte>(UpgradeErrorResponse));
+                    await outputStream.CloseAsync();
+                    return;
+                }
 
                 string connectionHeader;
                 string hostHeader;
@@ -195,32 +233,35 @@ class Program
                 await outputStream.WriteAsync(
                     new ArraySegment<byte>(UpgradeSuccessResponse));
             }
-            catch (Exception e)
-            {
-                Console.WriteLine("Error during connection upgrade: {0}", e.Message);
-                await outputStream.CloseAsync();
-                return;
-            }
-
-            // Build a HTTP connection on top of the stream abstraction
-            var http2Con = new Connection(
-                config, inputStream, outputStream,
-                options: new Connection.Options
-                {
-                    Logger = logProvider.CreateLogger("HTTP2Conn" + connectionId),
-                    ServerUpgradeRequest = upgrade,
-                });
-
-            // Close the connection if we get a GoAway from the client
-            var remoteGoAwayTask = http2Con.RemoteGoAwayReason;
-            var closeWhenRemoteGoAway = Task.Run(async () =>
-            {
-                await remoteGoAwayTask;
-                await http2Con.GoAwayAsync(ErrorCode.NoError, true);
-            });
         }
+        catch (Exception e)
+        {
+            Console.WriteLine("Error during connection upgrade: {0}", e.Message);
+            await outputStream.CloseAsync();
+            return;
+        }
+
+        // Build a HTTP connection on top of the stream abstraction
+        var http2Con = new Connection(
+            config, upgradeReadStream, outputStream,
+            options: new Connection.Options
+            {
+                Logger = logProvider.CreateLogger("HTTP2Conn" + connectionId),
+                ServerUpgradeRequest = upgrade,
+            });
+
+        // Close the connection if we get a GoAway from the client
+        var remoteGoAwayTask = http2Con.RemoteGoAwayReason;
+        var closeWhenRemoteGoAway = Task.Run(async () =>
+        {
+            await remoteGoAwayTask;
+            await http2Con.GoAwayAsync(ErrorCode.NoError, true);
+        });
     }
 
+    /// <summary>
+    /// A primitive HTTP/1 header parser
+    /// </summary>
     class RequestHeader
     {
         public string Method;
@@ -276,62 +317,98 @@ class Program
         }
     }
 
+    /// <summary>
+    /// Wrapper around the readable stream, which allows to read HTTP/1
+    /// request headers.
+    /// </summary>
     class UpgradeReadStream : IReadableByteStream
     {
         IReadableByteStream stream;
+        byte[] httpBuffer = new byte[MaxHeaderLength];
+        int httpBufferOffset = 0;
+        int httpHeaderLength = 0;
+
         ArraySegment<byte> remains;
 
         const int MaxHeaderLength = 1024;
+
+        public int HttpHeaderLength => httpHeaderLength;
+
+        public ArraySegment<byte> HeaderBytes =>
+            new ArraySegment<byte>(httpBuffer, 0, HttpHeaderLength);
 
         public UpgradeReadStream(IReadableByteStream stream)
         {
             this.stream = stream;
         }
 
-        public async Task<string> ReadHttpHeader()
+        /// <summary>
+        /// Waits until a whole HTTP/1 header, terminated by \r\n\r\n was received.
+        /// This may only be called once at the beginning of the stream.
+        /// If the header was found it can be accessed with HeaderBytes.
+        /// Then it must be either consumed or marked as unread.
+        /// </summary>
+        public async Task WaitForHttpHeader()
         {
-            byte[] httpBuffer = new byte[MaxHeaderLength];
-            var offset = 0;
-
             while (true)
             {
                 var res = await stream.ReadAsync(
-                    new ArraySegment<byte>(httpBuffer, offset, httpBuffer.Length - offset));
+                    new ArraySegment<byte>(httpBuffer, httpBufferOffset, httpBuffer.Length - httpBufferOffset));
 
                 if (res.EndOfStream)
                     throw new System.IO.EndOfStreamException();
-                offset += res.BytesRead;
+                httpBufferOffset += res.BytesRead;
 
-                // Check if stream theres and end of headers in the received data
-                var str = Encoding.ASCII.GetString(httpBuffer, 0, offset);
+                // Check for end of headers in the received data
+                var str = Encoding.ASCII.GetString(httpBuffer, 0, httpBufferOffset);
                 var endOfHeaderIndex = str.IndexOf("\r\n\r\n");
                 if (endOfHeaderIndex == -1)
                 {
                     // Header end not yet found
-                    if (offset == httpBuffer.Length)
+                    if (httpBufferOffset == httpBuffer.Length)
                     {
+                        httpBuffer = null;
                         throw new Exception("No HTTP header received");
                     }
                     // else read more bytes by looping around
                 }
                 else
                 {
-                    var remainOffset = endOfHeaderIndex + 4;
-                    if (remainOffset != offset)
-                    {
-                        remains = new ArraySegment<byte>(
-                            httpBuffer, remainOffset, offset - remainOffset);
-                    }
-
-                    var header = str.Substring(0, endOfHeaderIndex);
-                    return header;
+                    httpHeaderLength = endOfHeaderIndex + 4;
+                    return;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Marks the HTTP reader as unread, which means following
+        /// ReadAsync calls will reread the header.
+        /// </summary>
+        public void UnreadHttpHeader()
+        {
+            remains = new ArraySegment<byte>(
+                httpBuffer, 0, httpBufferOffset);
+        }
+
+        /// <summary>Removes the received HTTP header from the input buffer</summary>
+        public void ConsumeHttpHeader()
+        {
+            if (httpHeaderLength != httpBufferOffset)
+            {
+                // Not everything was consumed
+                remains = new ArraySegment<byte>(
+                    httpBuffer, httpHeaderLength, httpBufferOffset - httpHeaderLength);
+            }
+            else
+            {
+                remains = new ArraySegment<byte>();
+                httpBuffer = null;
             }
         }
 
         public ValueTask<StreamReadResult> ReadAsync(ArraySegment<byte> buffer)
         {
-            if (remains != null)
+            if (remains.Array != null)
             {
                 // Return leftover bytes from upgrade request
                 var toCopy = Math.Min(remains.Count, buffer.Count);
@@ -348,7 +425,9 @@ class Program
                 else
                 {
                     remains = new ArraySegment<byte>();
+                    httpBuffer = null;
                 }
+
                 return new ValueTask<StreamReadResult>(
                     new StreamReadResult()
                     {
