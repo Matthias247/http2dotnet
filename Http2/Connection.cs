@@ -21,6 +21,13 @@ namespace Http2
             /// Optional logger
             /// </summary>
             public ILogger Logger;
+
+            /// <summary>
+            /// If the connection is established through an upgrade from HTTP/1,
+            /// then this contains the information about the request that
+            /// triggered the upgrade.
+            /// </summary>
+            public ServerUpgradeRequest ServerUpgradeRequest;
         }
 
         private struct SharedData
@@ -82,6 +89,11 @@ namespace Http2
         internal readonly Settings localSettings;
         internal Settings remoteSettings = Settings.Default;
 
+        /// <summary>
+        /// Contains the HTTP/1 upgrade request that lead to this connection
+        /// </summary>
+        internal ServerUpgradeRequest serverUpgradeRequest;
+
         private TaskCompletionSource<GoAwayReason> remoteGoAwayTcs =
             new TaskCompletionSource<GoAwayReason>();
 
@@ -137,8 +149,30 @@ namespace Http2
             // Disabling it here is easier than wanting a custom config from the
             // user which disables it.
             localSettings.EnablePush = false;
-            // TODO: If the remote settings are not the default ones we will
-            // also need to validate those
+
+            // In case of an HTTP upgrade take the remote settings from there
+            if (IsServer && options?.ServerUpgradeRequest != null)
+            {
+                serverUpgradeRequest = options.Value.ServerUpgradeRequest;
+                if (!serverUpgradeRequest.IsValid)
+                {
+                    // Throw an exception in that case that this must be handled
+                    // from the outside
+                    // In the future the Connection component might be able to
+                    // send the correct error, but that might need some changes
+                    // to cope with an invalid initial state.
+                    throw new ArgumentException(
+                        "The ServerUpgradeRequest is invalid.\n" +
+                        "Invalid upgrade requests must be denied by the HTTP/1 " +
+                        "handler");
+                }
+                else
+                {
+                    // The remote has provided us settings through the
+                    // HTTP2-Settings header
+                    remoteSettings = serverUpgradeRequest.Settings;
+                }
+            }
 
             if (inputStream == null) throw new ArgumentNullException(nameof(inputStream));
             if (outputStream == null) throw new ArgumentNullException(nameof(outputStream));
@@ -261,6 +295,68 @@ namespace Http2
                 }
 
                 var continueRead = true;
+
+                // In case of HTTP upgrade the request that caused the upgrade
+                // must be transformed into a HTTP/2 request which uses stream ID 1,
+                // and which will get pushed towards the user
+                if (serverUpgradeRequest != null)
+                {
+                    var upgrade = serverUpgradeRequest;
+                    serverUpgradeRequest = null;
+
+                    // Create some pseudo header from the upgrade request for
+                    // stream ID 1
+                    var headers = new CompleteHeadersFrameData
+                    {
+                        StreamId = 1u,
+                        Priority = null,
+                        Headers = upgrade.Headers,
+                        EndOfStream = upgrade.Payload == null,
+                    };
+                    // Handle that frame, which pushes the stream to the user
+                    var err = await HandleHeaders(headers);
+                    if (err != null)
+                    {
+                        if (err.Value.StreamId == 0)
+                            continueRead = false;
+                        await HandleFrameProcessingError(err.Value);
+                    }
+                    else if (upgrade.Payload != null)
+                    {
+                        // Copy the payload into a buffer that's allocated by
+                        // our allocator, to avoid problems with deallocation.
+                        var buf = config.BufferPool.Rent(upgrade.Payload.Length);
+                        Array.Copy(upgrade.Payload, 0, buf, 0, upgrade.Payload.Length);
+
+                        // Directly also push the body into the stream
+                        StreamImpl stream = null;
+                        lock (shared.Mutex)
+                        {
+                            shared.streamMap.TryGetValue(1u, out stream);
+                        }
+
+                        // TODO:
+                        // If the payload is bigger then the configure flow control
+                        // limit then this causes an error, which will reset
+                        // Stream 1.
+                        bool tookBufferOwnership;
+                        err = stream.PushBuffer(
+                            new ArraySegment<byte>(buf, 0, upgrade.Payload.Length),
+                            true,
+                            out tookBufferOwnership);
+                        if (!tookBufferOwnership)
+                        {
+                            config.BufferPool.Return(buf);
+                        }
+                        if (err != null)
+                        {
+                            if (err.Value.StreamId == 0)
+                            continueRead = false;
+                            await HandleFrameProcessingError(err.Value);
+                        }
+                    }
+                }
+
                 while (continueRead)
                 {
                     // Read and process a single HTTP/2 frame and it's data
@@ -271,72 +367,9 @@ namespace Http2
                     {
                         if (err.Value.StreamId == 0)
                         {
-                            // Log the error
-                            if (logger != null && logger.IsEnabled(LogLevel.Error))
-                            {
-                                logger.LogError("Handling connection error {0}", err.Value);
-                            }
-
-                            // The error is a connection error
-                            // Write a suitable GOAWAY frame and stop the writer
-                            await InitiateGoAway(err.Value.Code, true);
-                            // We are not interested in the result of this.
-                            // If the connection close couldn't be queued and
-                            // performed then the the close was already initiated
-                            // or performed before and the connection is in the
-                            // process of shutting down.
-
-                            // Stop to read
                             continueRead = false;
                         }
-                        else
-                        {
-                            // Log the error
-                            if (logger != null && logger.IsEnabled(LogLevel.Error))
-                            {
-                                logger.LogError("Handling stream error {0}", err.Value);
-                            }
-
-                            // The error is a stream error
-                            // Check out if we know a stream with the given ID
-                            StreamImpl stream = null;
-                            lock (shared.Mutex)
-                            {
-                                shared.streamMap.TryGetValue(err.Value.StreamId, out stream);
-                                // TODO: Does it make sense to remove the stream
-                                // already here from the map or will that result
-                                // in a race
-                            }
-
-                            if (stream != null)
-                            {
-                                // The stream is known
-                                // Reset the stream locally, which will also
-                                // enqueue a RST_STREAM frame and remove it from
-                                // the map.
-                                await stream.Reset(err.Value.Code, false);
-                            }
-                            else
-                            {
-                                // Send a reset frame with the given error code
-                                var fh = new FrameHeader
-                                {
-                                    StreamId = err.Value.StreamId,
-                                    Type = FrameType.ResetStream,
-                                    Flags = 0,
-                                };
-                                var resetData = new ResetFrameData
-                                {
-                                    ErrorCode = err.Value.Code,
-                                };
-                                // Write the reset frame
-                                // Not interested in the result.
-                                // If the write fails the connection will get
-                                // closed and we will get the error reported on
-                                // the next read attempt.
-                                await writer.WriteResetStream(fh, resetData);
-                            }
-                        }
+                        await HandleFrameProcessingError(err.Value);
                     }
                 }
             }
@@ -429,6 +462,76 @@ namespace Http2
 
             // Once we got here the connection is fully closed and the Done
             // task will be fulfilled.
+        }
+
+        private async Task HandleFrameProcessingError(
+            Http2Error err)
+        {
+            if (err.StreamId == 0)
+            {
+                // Log the error
+                if (logger != null && logger.IsEnabled(LogLevel.Error))
+                {
+                    logger.LogError("Handling connection error {0}", err);
+                }
+
+                // The error is a connection error
+                // Write a suitable GOAWAY frame and stop the writer
+                await InitiateGoAway(err.Code, true);
+                // We are not interested in the result of this.
+                // If the connection close couldn't be queued and
+                // performed then the the close was already initiated
+                // or performed before and the connection is in the
+                // process of shutting down.
+            }
+            else
+            {
+                // Log the error
+                if (logger != null && logger.IsEnabled(LogLevel.Error))
+                {
+                    logger.LogError("Handling stream error {0}", err);
+                }
+
+                // The error is a stream error
+                // Check out if we know a stream with the given ID
+                StreamImpl stream = null;
+                lock (shared.Mutex)
+                {
+                    shared.streamMap.TryGetValue(err.StreamId, out stream);
+                    // TODO: Does it make sense to remove the stream
+                    // already here from the map or will that result
+                    // in a race
+                }
+
+                if (stream != null)
+                {
+                    // The stream is known
+                    // Reset the stream locally, which will also
+                    // enqueue a RST_STREAM frame and remove it from
+                    // the map.
+                    await stream.Reset(err.Code, false);
+                }
+                else
+                {
+                    // Send a reset frame with the given error code
+                    var fh = new FrameHeader
+                    {
+                        StreamId = err.StreamId,
+                        Type = FrameType.ResetStream,
+                        Flags = 0,
+                    };
+                    var resetData = new ResetFrameData
+                    {
+                        ErrorCode = err.Code,
+                    };
+                    // Write the reset frame
+                    // Not interested in the result.
+                    // If the write fails the connection will get
+                    // closed and we will get the error reported on
+                    // the next read attempt.
+                    await writer.WriteResetStream(fh, resetData);
+                }
+            }
         }
 
         /// <summary>
@@ -902,7 +1005,7 @@ namespace Http2
                 // Check if the data frame exceeds the flow control window for
                 // the connection. This can be safely checked in the dataSize != 0
                 // block since the connection flow control window can never be
-                // negative. The dataSize != 0 check avoids logging a flow 
+                // negative. The dataSize != 0 check avoids logging a flow
                 // control window change when non happened.
                 if (dataSize > connReceiveFlowWindow)
                 {

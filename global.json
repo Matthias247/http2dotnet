@@ -5,6 +5,7 @@
     "HpackTests",
     "Http2Tests",
     "ExampleServer",
+    "UpgradeExampleServer",
     "BenchmarkServer"
   ],
   "sdk": {
