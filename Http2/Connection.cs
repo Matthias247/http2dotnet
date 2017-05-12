@@ -32,8 +32,11 @@ namespace Http2
 
         private struct SharedData
         {
+            /// Guards the SharedData
             public object Mutex;
+            /// Gets set to true before the connection gets cleaned up
             public bool Closed;
+            /// Map from stream ID to stream state
             public Dictionary<uint, StreamImpl> streamMap;
             /// The last and maximum stream ID that was sent to the remote.
             /// 0 means we never sent anything

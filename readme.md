@@ -12,8 +12,8 @@ by encapsulating the protocol support in easy to use and flexible .NET classes.
 Examples for building simple applications on top of the library are provided
 within the repository.
 
-Current state
--------------
+## Current state
+
 This library is currently in an experimental state. The majority of HTTP/2
 features have been implemented and there is already a pretty good test coverage.
 It was tested in a h2c with prior knowledge configuration against **nghttp2**
@@ -22,8 +22,7 @@ a browser based client due a missing SSL connection with ALPN negotiation.
 Various features (especially for client side usage) have not yet been
 implemented (see Current limitations).
 
-Design goals
-------------
+## Design goals
 
 - Enable an easy integration of HTTP/2  into different frameworks and
   applications (ASP.NET core, other webservers, gRPC, etc.)
@@ -55,8 +54,7 @@ Design goals
   scheduling and continuation overhead.
 - Full support of all HTTP/2 features (however not yet everything is implemented)
 
-Usage
------
+## Usage
 
 The library exposes 2 important classes:
 - `Connection` represents a HTTP/2 connection between a client and the server.  
@@ -219,7 +217,100 @@ static async void HandleIncomingStream(IStream stream)
 }
 ```
 
-### Ping handling
+## Server side connection upgrades
+
+*This section only applies to unsecure HTTP. In the case of HTTPS the protocol
+negiotiation would always happen by the means of Application-Layer Protocol
+Negotiation (ALPN).*
+
+### Upgrading from HTTP/1.1
+
+The library supports HTTP connection upgrade requests on server side.
+Example code for how an upgrade can be performed can be found in the
+`UpgradeExampleServer`.
+
+In order to upgrade from HTTP/1.1 to HTTP/2, an external HTTP/1.1 parser is
+needed which reads the complete upgrade request into memory (including an
+optional body).
+
+If the headers of the received HTTP/1.1 request contain the related upgrade
+headers (`connection: Upgrade, HTTP2-Settings`), they payload can be checked for
+whether it is a valid upgrade request or not. In order to perform this step a
+`ServerUpgradeRequestBuilder` instance must be created, which gets fed all the
+information (headers, payload, request method, etc.) from the HTTP/1.1 request.
+With the `ServerUpgradeRequestBuilder.build()` method a `ServerUpgradeRequest`
+can be created, which exposes an `IsValid` property This property reflects
+whether the incoming request is a fully valid upgrade request.
+
+Only if the upgrade request is valid a HTTP/2 `Connection` object may be
+created, which get's the inital upgrade request injected into the constructor
+as part of the `Connection.Options` struct. In this case the `Connection` will
+create a HTTP/2 `Stream` from the content of the initial upgrade request,
+which can be handled like any other HTTP/2 Stream/Request.
+
+In case the upgrade request is valid, it is the applications responsibility to
+send `HTTP/1.1 101 Switching Protocols` response before creating the HTTP/2
+connection object - which won't perform this step, and instead directly speak
+HTTP/2.
+
+In case the upgrade request is not valid, the application may choose to either
+treat the request as a normal HTTP/1.1 request (by filtering all ugprade related)
+headers, or by responding with an HTTP error.
+
+Even if the upgrade headers are available and valid in the initial HTTP/1.1
+request, applications may choose not to perform the upgrade but instead handle
+the request as a normal HTTP/1.1 request. An example scenario for this is when
+the upgrade request indicates a large body (through `content-length` header),
+which would needed to be completely read into memory before the upgrade can be
+performed: If the application doesn't perform the upgrade and just handles the
+request in traditional fashion, the request body can be streamed in normal
+HTTP/1.1 fashion. It is generelly not recommended to accept upgrade requests
+which contain a body payload. However most client side libraries that perform
+upgrades (e.g. nghttp), will perform the upgrade only via `GET` and `HEAD`
+requests anyway.
+
+### Handling HTTP/2 (with and without upgrade) and HTTP/1 in parallel
+
+In some scenarios it might be required to implement a HTTP server that
+supports all of the following scenarios:
+- Support for standard HTTP/1.1 requests
+- Support for HTTP/2 requests with prior knowledge (The client knows that the
+  server speaks HTTP/2 and no upgrade is required).
+- Support for upgrading from HTTP/1.1 to HTTP/2
+
+This library supports this scenario, and a suitable example implementation can
+be found in the `UpgradeExampleServer` example.
+
+The idea is that the application (or web-server which is built around the
+library) starts off by reading and parsing an initial HTTP/1.1 request header
+through it's preferred HTTP parser.
+
+- If the request header exactly equals `PRI * HTTP/2.0\r\n\r\n` it's the start
+  of a HTTP/2 connection with prior knowledge. In this case the application can
+  directly create a HTTP/2 `Connection` object on top of the incoming stream
+  and delegate all further processing to it. In this special case, the
+  application must make sure that the stream that is passed to the `Connection`
+  object still emits the `PRI * HTTP/2.0\r\n\r\n` header when the `Connection`
+  starts reading from it. Otherwise the `Connection` establishment will fail.
+  This means the application must inspect, but not consume this header.
+- If the request is another HTTP/1.1 request which contains ugprade headers, the
+  application can handle it as described in the [Upgrading from HTTP/1.1 on server side](#upgrading-from-http-1-1-on-server-side)
+  section. In this case it's the applications responsibility to consume the
+  ugprade request from the underlying stream and send the necessary upgrade
+  status response.
+- If the request header is an HTTP/1.1 request without upgrade headers, the
+  application can directly handle it in it's preferred way.
+- If the incoming data resembles no HTTP request at all, the application can
+  also handle it in it's preferred way, e.g. by optionally sending an HTTP error
+  code and closing the connection.
+
+In the first two cases the actual HTTP requests from the connection will further
+flow to the application through by the means of this libraries `IStream`
+abstraction. In the third case it depends on the approach for HTTP/1.1 parrsing
+and processing. It's the applications responsibility to transform all request
+kinds into a common `Request`/`Response` representation if needed.
+
+## Ping handling
 
 The library will automatically respond to received PING frames
 by sending the associated PING ACKs.
@@ -250,8 +341,7 @@ catch (ConnectionClosedException)
 }
 ```
 
-Current limitations
--------------------
+## Current limitations
 
 The library currently faces the following limitations:
 - Missing support for creating streams from client side.
