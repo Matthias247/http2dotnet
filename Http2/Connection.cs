@@ -339,7 +339,7 @@ namespace Http2
                         }
 
                         // TODO:
-                        // If the payload is bigger then the configure flow control
+                        // If the payload is bigger than the configured flow control
                         // limit then this causes an error, which will reset
                         // Stream 1.
                         bool tookBufferOwnership;

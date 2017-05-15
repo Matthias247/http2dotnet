@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -196,6 +197,76 @@ namespace Http2Tests
                 ex.Message);
         }
 
-        // TODO: Tests with an acutal successful upgrade
+        [Theory]
+        [InlineData(0)]
+        [InlineData(100)]
+        public async Task ServerUpgradeRequestsShouldDispatchStream1(
+            int payloadLength)
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            int nrAcceptedStreams = 0;
+            IStream stream = null;
+            var handlerDone = new SemaphoreSlim(0);
+
+            Func<IStream, bool> listener = (s) =>
+            {
+                Interlocked.Increment(ref nrAcceptedStreams);
+                Task.Run(() =>
+                {
+                    stream = s;
+                    handlerDone.Release();
+                });
+                return true;
+            };
+
+            var startOfPayload = 44;
+            byte[] payload = new byte[payloadLength];
+            for (var i = 0; i < payloadLength; i++)
+            {
+                payload[i] = (byte)(startOfPayload + i);
+            }
+
+            var builder = new ServerUpgradeRequestBuilder();
+            var headers = ServerStreamTests.DefaultGetHeaders.ToList();
+            if (payloadLength != 0)
+            {
+                builder.SetPayload(new ArraySegment<byte>(payload));
+                headers.Add(new HeaderField(){
+                    Name="content-length",
+                    Value = payloadLength.ToString()});
+            }
+            builder.SetHeaders(headers);
+            builder.SetHttp2Settings("");
+            var upgrade = builder.Build();
+
+            var config = new ConnectionConfigurationBuilder(true)
+                .UseStreamListener(listener)
+                .Build();
+
+            var conn = new Connection(
+                config, inPipe, outPipe,
+                new Connection.Options
+                {
+                    Logger = loggerProvider.CreateLogger("http2Con"),
+                    ServerUpgradeRequest = upgrade,
+                });
+
+            await conn.PerformHandshakes(inPipe, outPipe);
+
+            var requestDone = await handlerDone.WaitAsync(
+                ReadableStreamTestExtensions.ReadTimeout);
+            Assert.True(requestDone, "Expected handler to complete within timeout");
+
+            Assert.Equal(1u, stream.Id);
+            Assert.Equal(StreamState.HalfClosedRemote, stream.State);
+            var rcvdHeaders = await stream.ReadHeadersAsync();
+            Assert.True(headers.SequenceEqual(rcvdHeaders));
+            var allData = await stream.ReadAllToArrayWithTimeout();
+            Assert.Equal(payloadLength, allData.Length);
+            Assert.Equal(payload, allData);
+
+            Assert.Equal(1, nrAcceptedStreams);
+        }
     }
 }
