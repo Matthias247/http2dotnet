@@ -187,12 +187,6 @@ namespace Http2
                 return this;
             }
 
-            if (settingsBytes.Length % 6 != 0)
-            {
-                // Invalid length
-                return this;
-            }
-
             // Deserialize the settings
             Settings newSettings = Settings.Default;
             var err = newSettings.UpdateFromData(
