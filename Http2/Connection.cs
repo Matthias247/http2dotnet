@@ -203,6 +203,7 @@ namespace Http2
                 {
                     MaxFrameSize = (int)remoteSettings.MaxFrameSize,
                     MaxHeaderListSize = (int)remoteSettings.MaxHeaderListSize,
+                    InitialWindowSize = (int)remoteSettings.InitialWindowSize,
                     DynamicTableSizeLimit = (int)dynTableSizeLimit,
                 },
                 new Hpack.Encoder.Options
@@ -885,7 +886,7 @@ namespace Http2
             }
 
             // Register that stream at the writer
-            if (!writer.RegisterStream(headers.StreamId, (int)remoteSettings.InitialWindowSize))
+            if (!writer.RegisterStream(headers.StreamId))
             {
                 // We can't register the stream at the writer
                 // This can happen if the writer is already closed
@@ -1505,12 +1506,6 @@ namespace Http2
                 await inputStream.ReadAll(
                     new ArraySegment<byte>(receiveBuffer, 0, fh.Length));
 
-                // Save the old initial window size for streams
-                // The maximum transitions are from int.MaxValue to 0
-                // and the other way around.
-                // This means the max delta is +/- int.MaxValue, which fits in int
-                var oldInitialStreamWindowSize = (int)remoteSettings.InitialWindowSize;
-
                 // Update the remote settings from that data
                 // This will also validate the settings
                 var err = remoteSettings.UpdateFromData(
@@ -1520,11 +1515,6 @@ namespace Http2
                     return err;
                 }
 
-                // Calculate the delta in window size
-                // The output stream windows need to be adjusted by this value.
-                var deltaInitialStreamWindowSize =
-                    (int)remoteSettings.InitialWindowSize - oldInitialStreamWindowSize;
-
                 // Set the settings received flag
                 settingsReceived = true;
 
@@ -1532,8 +1522,7 @@ namespace Http2
                 // send an acknowledge.
                 // As with the current UpdateSettings API we don't see what has
                 // changed we need to overwrite everything.
-                err = await writer.ApplyAndAckRemoteSettings(
-                    remoteSettings, deltaInitialStreamWindowSize);
+                err = await writer.ApplyAndAckRemoteSettings(remoteSettings);
                 if (err != null)
                 {
                     return err;

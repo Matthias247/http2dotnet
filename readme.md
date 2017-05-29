@@ -8,7 +8,7 @@ The goal of the library is to cover all protocol handling parts of the HTTP/2
 The goal of this library is NOT to provide a ready-to-use HTTP/2 server or
 client framework with concrete Request/Response abstractions. Instead it should
 enable other .NET libraries and applications to easily integrate HTTP/2 support
-by encapsulating the protocol support in easy to use and flexible .NET classes.
+by encapsulating the protocol handling in easy to use and flexible .NET classes.
 Examples for building simple applications on top of the library are provided
 within the repository.
 
@@ -24,7 +24,7 @@ implemented (see Current limitations).
 
 ## Design goals
 
-- Enable an easy integration of HTTP/2  into different frameworks and
+- Enable an easy integration of HTTP/2 into different frameworks and
   applications (ASP.NET core, other webservers, gRPC, etc.)
 - Provide an abstract interface for HTTP/2 Streams, on which custom Request
   and Response classes can be built. The Stream abstraction supports all

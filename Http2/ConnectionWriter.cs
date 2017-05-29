@@ -24,6 +24,7 @@ namespace Http2
             public int MaxFrameSize;
             public int MaxHeaderListSize;
             public int DynamicTableSizeLimit;
+            public int InitialWindowSize;
         }
 
         private struct StreamData
@@ -39,6 +40,28 @@ namespace Http2
             // stream is handed to the user.
             public Queue<WriteRequest> WriteQueue;
             public bool EndOfStreamQueued;
+        }
+
+        private struct SharedData
+        {
+            /// <summary>Guards the SharedData</summary>
+            public object Mutex;
+            /// <summary>
+            /// The currently set initial window size as indicated by the remote
+            /// settings.
+            /// </summary>
+            public int InitialWindowSize;
+            /// <summary>Outstanding writes the are associated to the connection</summary>
+            public Queue<WriteRequest> WriteQueue;
+            /// <summary>Streams for which data needs to be written</summary>
+            public List<StreamData> Streams;
+            /// <summary>
+            /// If this is not null the writer should apply the new settings
+            /// and send a settings ACK.
+            /// </summary>
+            public ChangeSettingsRequest ChangeSettingsRequest;
+            /// <summary>Whether the writer was requested to close after completing all writes</summary>
+            public bool CloseRequested;
         }
 
         /// <summary>
@@ -78,7 +101,6 @@ namespace Http2
         private class ChangeSettingsRequest
         {
             public Settings NewRemoteSettings;
-            public int InitialWindowSizeDelta;
             public AsyncManualResetEvent Completed;
             public Http2Error? Result;
         }
@@ -86,37 +108,40 @@ namespace Http2
         /// <summary>The associated connection</summary>
         public Connection Connection { get; }
         /// <summary>The output stream this is utilizing</summary>
-        IWriteAndCloseableByteStream outStream;
+        private readonly IWriteAndCloseableByteStream outStream;
 
         /// <summary>HPack encoder</summary>
-        Hpack.Encoder hEncoder;
-        /// <summary>Current set of options</summary>
-        Options options;
-
-        /// <summary>Whether the writer was requested to close after completing all writes</summary>
-        bool closeRequested = false;
-        /// <summary>Whether CloseAsync() has already been called on the connection</summary>
-        int closeConnectionIssued = 0;
+        private readonly Hpack.Encoder hEncoder;
 
         /// <summary>
-        /// If this is not null the writer should apply the new settings and
-        /// send a settings ACK.
+        /// Whether CloseAsync() has already been called on the connection.
+        /// This variable is atomic (utilized with Interlocked operations).
         /// </summary>
-        ChangeSettingsRequest changeSettingsRequest = null;
+        private int closeConnectionIssued = 0;
 
-        /// <summary>Outstanding writes the are associated to the connection</summary>
-        Queue<WriteRequest> WriteQueue = new Queue<WriteRequest>();
-        /// <summary>Streams for which data needs to be written</summary>
-        List<StreamData> Streams = new List<StreamData>();
-
-        private Object mutex = new Object();
+        /// <summary>
+        /// Contains all data which is shared and protected between threads.
+        /// </summary>
+        private SharedData shared = new SharedData();
         private AsyncManualResetEvent wakeupWriter = new AsyncManualResetEvent(false);
         private Task writeTask;
 
         private byte[] outBuf;
 
+        /// <summary>
+        /// The maximum dynamictable size that should be used for header encoding
+        /// </summary>
+        private readonly int DynamicTableSizeLimit;
+
+        // Current settings, which are only updated inside the write task and
+        // therefore need no protection:
+
         /// <summary>Flow control window for the connection</summary>
         private int connFlowWindow = Constants.InitialConnectionWindowSize;
+        /// <summary>The maximum frame size that should be used</summary>
+        private int MaxFrameSize;
+        /// <summary>The maximum amount of headerlist bytes that should be sent</summary>
+        private int MaxHeaderListSize;
 
         /// <summary>
         /// Returns a task that will be completed when the write task finishes
@@ -132,8 +157,18 @@ namespace Http2
         {
             this.Connection = connection;
             this.outStream = outStream;
-            this.options = options;
+            this.DynamicTableSizeLimit = options.DynamicTableSizeLimit;
+            this.MaxFrameSize = options.MaxFrameSize;
+            this.MaxHeaderListSize = options.MaxHeaderListSize;
             this.hEncoder = new Hpack.Encoder(hpackOptions);
+
+            // Initialize shared data
+            shared.Mutex = new object();
+            shared.CloseRequested = false;
+            shared.InitialWindowSize = options.InitialWindowSize;
+            shared.WriteQueue = new Queue<WriteRequest>();
+            shared.Streams = new List<StreamData>();
+
             // Start the task that performs the actual writing
             this.writeTask = Task.Run(() => this.RunAsync());
         }
@@ -189,16 +224,16 @@ namespace Http2
                     ChangeSettingsRequest changeSettings = null;
                     bool doClose = false;
 
-                    lock (this.mutex)
+                    lock (shared.Mutex)
                     {
                         // Do one of multiple possible actions
                         // Prio 1: Apply new settings
                         // Prio 2: Write a frame
                         // Prio 3: Close the connection if requested
-                        if (changeSettingsRequest != null)
+                        if (shared.ChangeSettingsRequest != null)
                         {
-                            changeSettings = changeSettingsRequest;
-                            changeSettingsRequest = null;
+                            changeSettings = shared.ChangeSettingsRequest;
+                            shared.ChangeSettingsRequest = null;
                         }
                         else
                         {
@@ -207,7 +242,7 @@ namespace Http2
                         // If there's nothing to write check if we should close the connection
                         if (changeSettings == null && writeRequest == null)
                         {
-                            if (this.closeRequested)
+                            if (shared.CloseRequested)
                             {
                                 doClose = true;
                             }
@@ -224,8 +259,7 @@ namespace Http2
                     if (changeSettings != null)
                     {
                         var err = ApplyNewSettings(
-                            changeSettings.NewRemoteSettings,
-                            changeSettings.InitialWindowSizeDelta);
+                            changeSettings.NewRemoteSettings);
                         if (err == null)
                         {
                             // TODO: Probably the ACK should be written in all
@@ -255,7 +289,8 @@ namespace Http2
             {
                 // We will catch this exception if writing to the output stream
                 // will fail at any point of time
-                if (Connection.logger != null && Connection.logger.IsEnabled(LogLevel.Error))
+                if (Connection.logger != null &&
+                    Connection.logger.IsEnabled(LogLevel.Error))
                 {
                     Connection.logger.LogError("Writer error: {0}", e.Message);
                 }
@@ -268,14 +303,14 @@ namespace Http2
             // Set the closeRequested flag which will avoid new write items to be added
             // In normal close procedure this will already have been set.
             // But in the case the writer does through an exception it's necessary
-            lock (mutex)
+            lock (shared.Mutex)
             {
-                closeRequested = true;
+                shared.CloseRequested = true;
                 // Complete a settings update that might still be enqueued
-                if (changeSettingsRequest != null)
+                if (shared.ChangeSettingsRequest != null)
                 {
-                    changeSettingsRequest.Completed.Set();
-                    changeSettingsRequest = null;
+                    shared.ChangeSettingsRequest.Completed.Set();
+                    shared.ChangeSettingsRequest = null;
                 }
                 // Fail pending writes that are still queued up
                 FinishAllOutstandingWritesLocked();
@@ -318,9 +353,9 @@ namespace Http2
                 // without an exception.
                 if (needWakeup)
                 {
-                    lock (mutex)
+                    lock (shared.Mutex)
                     {
-                        this.closeRequested = true;
+                        shared.CloseRequested = true;
                     }
                     wakeupWriter.Set();
                 }
@@ -350,9 +385,9 @@ namespace Http2
             // Look if there are writes necessary for the connection queue
             // Connection related writes are prioritized against
             // stream related writes
-            if (this.WriteQueue.Count > 0)
+            if (shared.WriteQueue.Count > 0)
             {
-                var writeRequest = this.WriteQueue.Dequeue();
+                var writeRequest = shared.WriteQueue.Dequeue();
                 return writeRequest;
             }
 
@@ -360,9 +395,9 @@ namespace Http2
             // This logic is quite primitive at the moment and won't be fair to
             // higher stream numbers. However the flow control windows will avoid
             // total starvation for those
-            for (var i = 0; i < Streams.Count; i++)
+            for (var i = 0; i < shared.Streams.Count; i++)
             {
-                var s = Streams[i];
+                var s = shared.Streams[i];
                 if (s.WriteQueue.Count == 0) continue;
                 var first = s.WriteQueue.Peek();
                 // If it's not a data frame we can always write it
@@ -373,7 +408,7 @@ namespace Http2
                     var canSend = Math.Min(this.connFlowWindow, s.Window);
                     // And also respect the maximum frame size
                     // As we don't use padding we can use the full frame
-                    canSend = Math.Min(canSend, options.MaxFrameSize);
+                    canSend = Math.Min(canSend, MaxFrameSize);
                     // If flow control window is empty check the next stream
                     // However empty data frames can be sent without a window
                     // TODO: Check if it's allowed to send 0 byte data frames
@@ -384,7 +419,7 @@ namespace Http2
                     var toSend = Math.Min(canSend, first.Data.Count);
                     connFlowWindow -= toSend;
                     s.Window -= toSend;
-                    Streams[i] = s;
+                    shared.Streams[i] = s;
 
                     if (Connection.logger != null &&
                         Connection.logger.IsEnabled(LogLevel.Trace))
@@ -428,7 +463,7 @@ namespace Http2
                 // Window update frames are send through the generic queue
                 if (first.Header.Type == FrameType.ResetStream || first.Header.HasEndOfStreamFlag)
                 {
-                    Streams.RemoveAt(i);
+                    shared.Streams.RemoveAt(i);
                     // Make sure that the queue inside this stream
                     // does not contain anything after the written element.
                     // This would be a contract violation and StreamImpl should be checked.
@@ -449,7 +484,8 @@ namespace Http2
         /// </summary>
         private void LogOutgoingFrameHeader(FrameHeader fh)
         {
-            if (Connection.logger != null && Connection.logger.IsEnabled(LogLevel.Trace))
+            if (Connection.logger != null &&
+                Connection.logger.IsEnabled(LogLevel.Trace))
             {
                 Connection.logger.LogTrace(
                     "send " + FramePrinter.PrintFrameHeader(fh));
@@ -511,7 +547,7 @@ namespace Http2
                 // data anymore
                 if (wr.Header.HasEndOfStreamFlag)
                 {
-                    lock (mutex)
+                    lock (shared.Mutex)
                     {
                         RemoveStreamLocked(wr.Header.StreamId);
                     }
@@ -538,7 +574,7 @@ namespace Http2
             return this.outStream.WriteAsync(data);
         }
 
-        private bool TryEnqueueWriteRequest(uint streamId, WriteRequest wr)
+        private bool TryEnqueueWriteRequestLocked(uint streamId, WriteRequest wr)
         {
             // Put frames for the connection(streamId 0)
             // as well as reset and window update frames in the main outgoing queue
@@ -546,7 +582,7 @@ namespace Http2
                 wr.Header.Type == FrameType.WindowUpdate ||
                 wr.Header.Type == FrameType.ResetStream)
             {
-                this.WriteQueue.Enqueue(wr);
+                shared.WriteQueue.Enqueue(wr);
                 // Possible improvement for resets: Check if a reset for that stream
                 // ID is already queued.
                 // If we queue a reset frame for a stream we don't need
@@ -561,9 +597,9 @@ namespace Http2
             }
 
             // All other frame types belong in the queue for the associated stream
-            for (var i = 0; i < Streams.Count; i++)
+            for (var i = 0; i < shared.Streams.Count; i++)
             {
-                var stream = Streams[i];
+                var stream = shared.Streams[i];
                 if (stream.StreamId == streamId)
                 {
                     // If a reset or end of stream is already queued
@@ -575,7 +611,7 @@ namespace Http2
                     if (wr.Header.HasEndOfStreamFlag)
                     {
                         stream.EndOfStreamQueued = true;
-                        Streams[i] = stream;
+                        shared.Streams[i] = stream;
                     }
                     stream.WriteQueue.Enqueue(wr);
                     return true;
@@ -641,21 +677,21 @@ namespace Http2
             uint streamId, Action<WriteRequest> populateRequest, bool closeAfterwards)
         {
             WriteRequest wr = null;
-            lock (mutex)
+            lock (shared.Mutex)
             {
-                if (closeRequested)
+                if (shared.CloseRequested)
                 {
                     return WriteResult.ConnectionClosedError;
                 }
                 if (closeAfterwards)
                 {
-                    closeRequested = true;
+                    shared.CloseRequested = true;
                 }
 
                 wr = AllocateWriteRequest();
                 populateRequest(wr);
 
-                var enqueued = TryEnqueueWriteRequest(streamId, wr);
+                var enqueued = TryEnqueueWriteRequestLocked(streamId, wr);
                 if (!enqueued)
                 {
                     return WriteResult.StreamResetError;
@@ -896,12 +932,12 @@ namespace Http2
             // to be we just take options.MaxFrameSize.
             // The output buffer could however also be limited to a smaller value,
             // which means more continuation frames would be used (see logic below).
-            EnsureBuffer(FrameHeader.HeaderSize + options.MaxFrameSize);
+            EnsureBuffer(FrameHeader.HeaderSize + MaxFrameSize);
 
             // Limit the maximum frame size also to the limit of the output
             // buffer.
             var maxFrameSize = Math.Min(
-                options.MaxFrameSize,
+                MaxFrameSize,
                 outBuf.Length - FrameHeader.HeaderSize);
 
             var headerView = new ArraySegment<byte>(
@@ -1020,24 +1056,24 @@ namespace Http2
         /// True if the stream could be succesfully regiestered.
         /// False otherwise.
         /// </returns>
-        public bool RegisterStream(uint streamId, int flowWindow)
+        public bool RegisterStream(uint streamId)
         {
-            lock (mutex)
+            lock (shared.Mutex)
             {
                 // After close is initiated or errors happened no further streams
                 // may be registered
-                if (this.closeRequested)
+                if (shared.CloseRequested)
                 {
                     return false;
                 }
 
                 var sd = new StreamData{
                     StreamId = streamId,
-                    Window = flowWindow,
+                    Window = shared.InitialWindowSize, // TODO: Switch to shared.?
                     WriteQueue = new Queue<WriteRequest>(),
                     EndOfStreamQueued = false,
                 };
-                this.Streams.Add(sd);
+                shared.Streams.Add(sd);
             }
 
             return true;
@@ -1050,7 +1086,7 @@ namespace Http2
         /// </summary>
         public void RemoveStream(uint streamId)
         {
-            lock (mutex)
+            lock (shared.Mutex)
             {
                 RemoveStreamLocked(streamId);
             }
@@ -1059,13 +1095,13 @@ namespace Http2
         private void RemoveStreamLocked(uint streamId)
         {
             Queue<WriteRequest> writeQueue = null;
-            for (var i = 0; i < Streams.Count; i++)
+            for (var i = 0; i < shared.Streams.Count; i++)
             {
-                var s = Streams[i];
+                var s = shared.Streams[i];
                 if (s.StreamId == streamId)
                 {
                     writeQueue = s.WriteQueue;
-                    Streams.RemoveAt(i);
+                    shared.Streams.RemoveAt(i);
                     break;
                 }
             }
@@ -1083,8 +1119,8 @@ namespace Http2
 
         private void FinishAllOutstandingWritesLocked()
         {
-            var streamsMap = this.Streams;
-            foreach (var stream in Streams)
+            var streamsMap = shared.Streams;
+            foreach (var stream in shared.Streams)
             {
                 // Signal all queued up writes as finished with an ResetError
                 foreach (var elem in stream.WriteQueue)
@@ -1096,12 +1132,12 @@ namespace Http2
             }
             streamsMap.Clear();
 
-            foreach (var elem in WriteQueue)
+            foreach (var elem in shared.WriteQueue)
             {
                 elem.Result = WriteResult.StreamResetError;
                 elem.Completed.Set();
             }
-            WriteQueue.Clear();
+            shared.WriteQueue.Clear();
         }
 
         /// <summary>
@@ -1112,26 +1148,24 @@ namespace Http2
         /// Returns an error if updating the signal leaded to an invalid state.
         /// </returns>
         public async Task<Http2Error?> ApplyAndAckRemoteSettings(
-            Settings newRemoteSettings,
-            int initialWindowSizeDelta)
+            Settings newRemoteSettings)
         {
             ChangeSettingsRequest changeRequest = null;
 
-            lock (mutex)
+            lock (shared.Mutex)
             {
                 // No need to apply settings when we are shutting down away
                 // There might be some frames left for sending, for which the
                 // new Settings can be used. But we should still be able to send
                 // them with the old settings, as we don't ACK the new settings.
-                if (closeRequested) return null;
+                if (shared.CloseRequested) return null;
 
                 changeRequest = new ChangeSettingsRequest
                 {
                     NewRemoteSettings = newRemoteSettings,
-                    InitialWindowSizeDelta = initialWindowSizeDelta,
                     Completed = new AsyncManualResetEvent(false),
                 };
-                changeSettingsRequest = changeRequest;
+                shared.ChangeSettingsRequest = changeRequest;
             }
 
             wakeupWriter.Set();
@@ -1141,8 +1175,7 @@ namespace Http2
         }
 
         private Http2Error? ApplyNewSettings(
-            Settings remoteSettings,
-            int initialWindowSizeDelta)
+            Settings remoteSettings)
         {
             // Update the maximum frame size
             // Remark: The cast is valid, since the settings are validated before
@@ -1155,9 +1188,9 @@ namespace Http2
             // bigger than the initally set maxFrameSize, as the pool allocator
             // is able to return a bigger size. In that case the bigger size
             // will be utilized up to maxFrameSize.
-            this.options.MaxFrameSize = (int)remoteSettings.MaxFrameSize;
+            this.MaxFrameSize = (int)remoteSettings.MaxFrameSize;
 
-            // remoteSettings.MaxHeaderListSize is currently not used
+            this.MaxHeaderListSize = (int)remoteSettings.MaxHeaderListSize;
 
             // Update the maximum HPACK table size
             var newRequestedTableSize = (int)remoteSettings.HeaderTableSize;
@@ -1172,7 +1205,7 @@ namespace Http2
                 // As a compromise increase the header table size up to a
                 // configured limit.
                 this.hEncoder.DynamicTableSize =
-                    Math.Min(newRequestedTableSize, options.DynamicTableSizeLimit);
+                    Math.Min(newRequestedTableSize, DynamicTableSizeLimit);
             }
             else
             {
@@ -1182,8 +1215,22 @@ namespace Http2
                 this.hEncoder.DynamicTableSize = newRequestedTableSize;
             }
 
-            // Update all streams windows
-            return UpdateAllStreamWindows(initialWindowSizeDelta);
+            // Store the new initial window size and update all existing flow
+            // control windows. This needs to be atomic inside a mutex, to
+            // guarantee that concurrent and future stream registrations utilize
+            // the correct window.
+            lock (shared.Mutex)
+            {
+                // Calculate the delta for the window size
+                // The output stream windows need to be adjusted by this value.
+                var initialWindowSizeDelta =
+                    (int)remoteSettings.InitialWindowSize - shared.InitialWindowSize;
+
+                shared.InitialWindowSize = (int)remoteSettings.InitialWindowSize;
+
+                // Update all streams windows
+                return UpdateAllStreamWindowsLocked(initialWindowSizeDelta);
+            }
         }
 
         /// <summary>
@@ -1212,7 +1259,7 @@ namespace Http2
                 };
             }
 
-            lock (mutex)
+            lock (shared.Mutex)
             {
                 if (streamId == 0)
                 {
@@ -1241,11 +1288,11 @@ namespace Http2
                 }
                 else
                 {
-                    for (var i = 0; i < Streams.Count; i++)
+                    for (var i = 0; i < shared.Streams.Count; i++)
                     {
-                        if (Streams[i].StreamId == streamId)
+                        if (shared.Streams[i].StreamId == streamId)
                         {
-                            var s = Streams[i];
+                            var s = shared.Streams[i];
                             // Check for overflow
                             var updatedValue = (long)s.Window + (long)amount;
                             if (updatedValue > (long)int.MaxValue)
@@ -1267,7 +1314,7 @@ namespace Http2
                                     streamId, s.Window, (int)updatedValue);
                             }
                             s.Window = (int)updatedValue;
-                            Streams[i] = s;
+                            shared.Streams[i] = s;
                             if (s.Window > 0 && s.WriteQueue.Count > 0)
                             {
                                 wakeup = true;
@@ -1293,14 +1340,15 @@ namespace Http2
         /// Returns an error if at least one flow control window over- or underflows
         /// during this operation.
         /// </returns>
-        private Http2Error? UpdateAllStreamWindows(int amount)
+        private Http2Error? UpdateAllStreamWindowsLocked(int amount)
         {
             bool hasOverflow = false;
+            if (amount == 0) return null;
 
             // Iterate over all streams and apply window update
-            for (var i = 0; i < Streams.Count; i++)
+            for (var i = 0; i < shared.Streams.Count; i++)
             {
-                var s = Streams[i];
+                var s = shared.Streams[i];
                 // Check for overflow and underflow
                 var updatedValue = (long)s.Window + (long)amount;
                 if (updatedValue > (long)int.MaxValue ||
@@ -1319,7 +1367,7 @@ namespace Http2
                         s.StreamId, s.Window, s.Window + amount);
                 }
                 s.Window += amount;
-                Streams[i] = s;
+                shared.Streams[i] = s;
             }
 
             if (hasOverflow)
