@@ -656,6 +656,70 @@ namespace Http2
         }
 
         /// <summary>
+        /// Creates a new Stream on top of the connection.
+        /// This method may only be called on the client side of a connection.
+        /// </summary>
+        public async Task<IStream> CreateStream(
+            IEnumerable<Hpack.HeaderField> headers,
+            bool endOfStream = false)
+        {
+            if (config.IsServer)
+                throw new NotSupportedException(
+                    "Streams can only be created for clients");
+
+            var hvr = HeaderValidator.ValidateRequestHeaders(headers);
+            if (hvr != HeaderValidationResult.Ok)
+                throw new Exception(hvr.ToString());
+
+            uint streamId = 0u;
+            StreamImpl stream = null;
+            int remoteWindowSize = 0;
+            lock (shared.Mutex)
+            {
+                if (shared.Closed)
+                {
+                    // Connection is already closed
+                    throw new ConnectionClosedException();
+                }
+
+                // Retrieve a stream ID for the new stream
+                if (shared.LastOutgoingStreamId == 0)
+                    shared.LastOutgoingStreamId = 1;
+                else if (shared.LastOutgoingStreamId <= int.MaxValue - 2)
+                    shared.LastOutgoingStreamId += 2;
+                else
+                    throw new Exception("Out of Stream IDs");
+
+                streamId = shared.LastOutgoingStreamId;
+
+                // Create a stream
+                stream = new StreamImpl(
+                    this, streamId,
+                    StreamState.Idle,
+                    (int)localSettings.InitialWindowSize);
+
+                shared.streamMap[streamId] = stream;
+
+                // TODO: This one faces a race condition. By the time
+                // that we have registered the stream with that size at the
+                // writer the size might already have changed.
+                remoteWindowSize = (int)remoteSettings.InitialWindowSize;
+            }
+
+            // Register that stream at the writer
+            if (!writer.RegisterStream(streamId, remoteWindowSize))
+            {
+                // We can't register the stream at the writer
+                // This can happen if the writer is already closed
+                // In that case the streamMap will be cleaned up soon
+                throw new ConnectionClosedException();
+            }
+
+            await stream.WriteHeadersAsync(headers, endOfStream);
+            return stream;
+        }
+
+        /// <summary>
         /// Internal version of the GoAway function. This will not wait for the
         /// connection to close in order not to deadlock when it's u sed from
         /// inside the Reader routine.
