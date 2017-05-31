@@ -10,7 +10,7 @@ namespace Http2
     /// <summary>
     /// Stores the data of a HEADE frame and all following CONTINUATION frames
     /// </summary>
-    public struct CompleteHeadersFrameData
+    internal struct CompleteHeadersFrameData
     {
         public uint StreamId;
         public PriorityData? Priority;
@@ -22,7 +22,7 @@ namespace Http2
     /// Reads and decodes a sequence of HEADERS and CONTINUATION frames into
     /// complete decoded header lists.
     /// </summary>
-    public class HeaderReader : IDisposable
+    internal class HeaderReader : IDisposable
     {
         /// <summary>
         /// Stores the result of a ReadHeaders operation

@@ -14,7 +14,7 @@ namespace Http2
     /// <summary>
     /// The task that writes to the connection
     /// </summary>
-    public class ConnectionWriter
+    internal class ConnectionWriter
     {
         /// <summary>
         /// Configuration options for the ConnectionWriter

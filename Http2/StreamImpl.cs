@@ -12,7 +12,7 @@ namespace Http2
     /// <summary>
     /// Implementation of a HTTP/2 stream
     /// </summary>
-    public class StreamImpl : IStream
+    internal class StreamImpl : IStream
     {
         /// <summary>The ID of the stream</summary>
         public uint Id { get; }
