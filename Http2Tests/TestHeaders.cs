@@ -18,6 +18,23 @@ namespace Http2Tests
             new HeaderField { Name = "abc", Value = "def" },
         };
 
+        public static byte[] EncodedDefaultGetHeaders = new byte[]
+        {
+            0x82, // :method GET
+            0x86, // :scheme http
+            0x84, // :path /
+            0x40, 0x03, (byte)'a', (byte)'b', (byte)'c',
+            0x03, (byte)'d', (byte)'e', (byte)'f',
+        };
+
+        public static byte[] EncodedIndexedDefaultGetHeaders = new byte[]
+        {
+            0x82, // :method GET
+            0x86, // :scheme http
+            0x84, // :path /
+            0xBE, // Indexed header
+        };
+
         public static readonly HeaderField[] DefaultStatusHeaders = new HeaderField[]
         {
             new HeaderField { Name = ":status", Value = "200" },
@@ -26,7 +43,9 @@ namespace Http2Tests
 
         public static byte[] EncodedDefaultStatusHeaders = new byte[]
         {
-            0x88, 0x40, 0x03, 0x78, 0x79, 0x7a, 0x03, 0x67, 0x68, 0x69,
+            0x88,
+            0x40, 0x03, (byte)'x', (byte)'y', (byte)'z',
+            0x03, (byte)'g', (byte)'h', (byte)'i',
         };
 
         public static readonly HeaderField[] DefaultTrailingHeaders = new HeaderField[]
@@ -36,7 +55,8 @@ namespace Http2Tests
 
         public static byte[] EncodedDefaultTrailingHeaders = new byte[]
         {
-            0x40, 0x04, 0x74, 0x72, 0x61, 0x69, 0x03, 0x6c, 0x65, 0x72,
+            0x40, 0x04, (byte)'t', (byte)'r', (byte)'a', (byte)'i',
+            0x03, (byte)'l', (byte)'e', (byte)'r'
         };
     }
 }
