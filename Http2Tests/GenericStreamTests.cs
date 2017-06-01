@@ -8,6 +8,7 @@ using Xunit.Abstractions;
 
 using Http2;
 using Http2.Hpack;
+using static Http2Tests.TestHeaders;
 
 namespace Http2Tests
 {
@@ -52,7 +53,7 @@ namespace Http2Tests
             await inPipe.WriteData(1u, 0);
             // Send trailers
             await inPipe.WriteHeaders(res.hEncoder, 1u, true,
-                ServerStreamTests.DefaultTrailingHeaders);
+                DefaultTrailingHeaders);
             // Check for no stream error
             await inPipe.WritePing(new byte[8], false);
             await outPipe.ReadAndDiscardPong();
@@ -86,7 +87,7 @@ namespace Http2Tests
                 Task.Run(async () =>
                 {
                     var rcvdHeaders = await s.ReadHeadersAsync();
-                    headersOk = ServerStreamTests.DefaultGetHeaders.SequenceEqual(rcvdHeaders);
+                    headersOk = DefaultGetHeaders.SequenceEqual(rcvdHeaders);
                     streamIdOk = s.Id == streamId;
                     streamStateOk = s.State == StreamState.Open;
                     handlerDone.Release();
@@ -118,7 +119,7 @@ namespace Http2Tests
                 }
                 var result = hEncoder.EncodeInto(
                     new ArraySegment<byte>(outBuf, headerOffset, outBuf.Length-headerOffset),
-                    ServerStreamTests.DefaultGetHeaders);
+                    DefaultGetHeaders);
                 var totalLength = headerOffset + result.UsedBytes;
                 if (numPadding != null) totalLength += numPadding.Value;
 
@@ -190,7 +191,7 @@ namespace Http2Tests
 
             var r = await ServerStreamTests.StreamCreator.CreateConnectionAndStream(
                 StreamState.Open, loggerProvider, inPipe, outPipe);
-            await r.stream.WriteHeadersAsync(ServerStreamTests.DefaultStatusHeaders, false);
+            await r.stream.WriteHeadersAsync(DefaultStatusHeaders, false);
             await outPipe.ReadAndDiscardHeaders(1u, false);
 
             var dataSize = Settings.Default.MaxFrameSize + 10;
@@ -229,7 +230,7 @@ namespace Http2Tests
             if (!isServer)
                 throw new Exception("For clients the stream must be created from connection");
             await inPipe.WriteHeaders(
-                hEncoder, createdStreamId, false, ServerStreamTests.DefaultGetHeaders);
+                hEncoder, createdStreamId, false, DefaultGetHeaders);
 
             await inPipe.WriteData(streamId, 0);
             await outPipe.AssertResetStreamReception(streamId, ErrorCode.StreamClosed);

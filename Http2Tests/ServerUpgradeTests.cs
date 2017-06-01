@@ -11,6 +11,7 @@ using Xunit.Abstractions;
 
 using Http2;
 using Http2.Hpack;
+using static Http2Tests.TestHeaders;
 
 namespace Http2Tests
 {
@@ -30,7 +31,7 @@ namespace Http2Tests
             string encodedSettings)
         {
             var builder = new ServerUpgradeRequestBuilder();
-            builder.SetHeaders(ServerStreamTests.DefaultGetHeaders.ToList());
+            builder.SetHeaders(DefaultGetHeaders.ToList());
             builder.SetHttp2Settings(encodedSettings);
             var upgrade = builder.Build();
             Assert.False(upgrade.IsValid);
@@ -45,7 +46,7 @@ namespace Http2Tests
             byte[] payload)
         {
             var builder = new ServerUpgradeRequestBuilder();
-            builder.SetHeaders(ServerStreamTests.DefaultGetHeaders.ToList());
+            builder.SetHeaders(DefaultGetHeaders.ToList());
             var base64 = Convert.ToBase64String(payload);
             base64 = base64.Replace('/', '_');
             base64 = base64.Replace('+', '-');
@@ -61,7 +62,7 @@ namespace Http2Tests
             byte[] payload)
         {
             var builder = new ServerUpgradeRequestBuilder();
-            builder.SetHeaders(ServerStreamTests.DefaultGetHeaders.ToList());
+            builder.SetHeaders(DefaultGetHeaders.ToList());
             var base64 = Convert.ToBase64String(payload);
             base64 = base64.Replace('/', '_');
             base64 = base64.Replace('+', '-');
@@ -145,7 +146,7 @@ namespace Http2Tests
         {
             var builder = new ServerUpgradeRequestBuilder();
             builder.SetHttp2Settings("");
-            var headers = ServerStreamTests.DefaultGetHeaders.ToList();
+            var headers = DefaultGetHeaders.ToList();
             if (contentLength != null)
             {
                 headers.Add(new HeaderField(){
@@ -176,7 +177,7 @@ namespace Http2Tests
                 .Build();
 
             var builder = new ServerUpgradeRequestBuilder();
-            builder.SetHeaders(ServerStreamTests.DefaultGetHeaders.ToList());
+            builder.SetHeaders(DefaultGetHeaders.ToList());
             builder.SetHttp2Settings("!");
             var upgrade = builder.Build();
             Assert.False(upgrade.IsValid);
@@ -228,7 +229,7 @@ namespace Http2Tests
             }
 
             var builder = new ServerUpgradeRequestBuilder();
-            var headers = ServerStreamTests.DefaultGetHeaders.ToList();
+            var headers = DefaultGetHeaders.ToList();
             if (payloadLength != 0)
             {
                 builder.SetPayload(new ArraySegment<byte>(payload));

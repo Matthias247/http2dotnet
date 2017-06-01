@@ -79,7 +79,7 @@ namespace Http2Tests
             await outPipe.AssertGoAwayReception(ErrorCode.NoError, 1u);
             // Try to establish a new stream
             var hEncoder = new Http2.Hpack.Encoder();
-            await inPipe.WriteHeaders(hEncoder, 3, true, ServerStreamTests.DefaultGetHeaders);
+            await inPipe.WriteHeaders(hEncoder, 3, true, TestHeaders.DefaultGetHeaders);
             // Expect a stream rejection
             await outPipe.AssertResetStreamReception(3u, ErrorCode.RefusedStream);
         }

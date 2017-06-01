@@ -75,7 +75,7 @@ namespace Http2Tests
 
             var streamId = 7u;
             await inPipe.WriteHeaders(
-                hEncoder, streamId, false, ServerStreamTests.DefaultGetHeaders);
+                hEncoder, streamId, false, TestHeaders.DefaultGetHeaders);
 
             await inPipe.WriteResetStream(streamId - 2, ErrorCode.RefusedStream);
             await inPipe.WriteResetStream(streamId - 4, ErrorCode.Cancel);

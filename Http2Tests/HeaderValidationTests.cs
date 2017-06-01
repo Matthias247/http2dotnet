@@ -124,7 +124,7 @@ namespace Http2Tests
             var http2Con = await ConnectionUtils.BuildEstablishedConnection(
                 true, inPipe, outPipe, loggerProvider, listener);
 
-            var headers = ServerStreamTests.DefaultGetHeaders.Append(
+            var headers = TestHeaders.DefaultGetHeaders.Append(
                 new HeaderField {
                     Name = "content-length",
                     Value = contentLen.ToString() });

@@ -183,7 +183,7 @@ namespace Http2Tests
             await Assert.ThrowsAsync<StreamResetException>(async () =>
             {
                 await res.stream.WriteHeadersAsync(
-                    ServerStreamTests.DefaultStatusHeaders, true);
+                    TestHeaders.DefaultStatusHeaders, true);
             });
             await Assert.ThrowsAsync<StreamResetException>(async () =>
             {

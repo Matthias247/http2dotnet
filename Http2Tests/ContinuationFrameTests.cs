@@ -9,6 +9,7 @@ using Xunit.Abstractions;
 
 using Http2;
 using Http2.Hpack;
+using static Http2Tests.TestHeaders;
 
 namespace Http2Tests
 {
@@ -32,7 +33,7 @@ namespace Http2Tests
                 true, inPipe, outPipe, loggerProvider, listener);
 
             var hEncoder = new Encoder();
-            await inPipe.WriteContinuation(hEncoder, 1u, ServerStreamTests.DefaultGetHeaders, true);
+            await inPipe.WriteContinuation(hEncoder, 1u, DefaultGetHeaders, true);
             await outPipe.AssertGoAwayReception(ErrorCode.ProtocolError, 0);
             await outPipe.AssertStreamEnd();
         }
@@ -64,7 +65,7 @@ namespace Http2Tests
                 true, inPipe, outPipe, loggerProvider, listener);
 
             var hEncoder = new Encoder();
-            var totalHeaders = ServerStreamTests.DefaultGetHeaders;
+            var totalHeaders = DefaultGetHeaders;
             var isContinuation = false;
             var toSkip = 0;
             var isEndOfHeaders = false;
@@ -133,7 +134,7 @@ namespace Http2Tests
             var hEncoder = new Encoder();
             // Construct a proper set of header here, where a single headerfield could
             // by splitted over more than 1 fragment
-            var totalHeaders = ServerStreamTests.DefaultGetHeaders.TakeWhile(
+            var totalHeaders = DefaultGetHeaders.TakeWhile(
                 h => h.Name.StartsWith(":"));
             totalHeaders = totalHeaders.Append(
                 new HeaderField { Name = "longname", Value = "longvalue" });
@@ -207,7 +208,7 @@ namespace Http2Tests
             var hEncoder = new Encoder();
             // Construct a proper set of header here, where a single headerfield could
             // by splitted over more than 1 fragment
-            var totalHeaders = ServerStreamTests.DefaultGetHeaders.TakeWhile(
+            var totalHeaders = DefaultGetHeaders.TakeWhile(
                 h => h.Name.StartsWith(":"));
             totalHeaders = totalHeaders.Append(
                 new HeaderField { Name = "longname", Value = "longvalue" });
@@ -290,7 +291,7 @@ namespace Http2Tests
             var headers = new List<HeaderField>();
             // The :status header is necessary to avoid an exception on send
             headers.AddRange(
-                ServerStreamTests.DefaultStatusHeaders.TakeWhile(sh =>
+                DefaultStatusHeaders.TakeWhile(sh =>
                     sh.Name.StartsWith(":")));
 
             const int headerLen = 3 + 10 + 8; // The calculated size of one header field
@@ -373,13 +374,13 @@ namespace Http2Tests
             // Send a valid HEADERS frame
             await inPipe.WriteHeaders(
                 hEncoder, 1, false,
-                ServerStreamTests.DefaultGetHeaders.Take(2), false);
+                DefaultGetHeaders.Take(2), false);
 
             // Followed by an invalid continuation frame
             var outBuf = new byte[Settings.Default.MaxFrameSize];
             var result = hEncoder.EncodeInto(
                 new ArraySegment<byte>(outBuf),
-                ServerStreamTests.DefaultGetHeaders.Skip(2));
+                DefaultGetHeaders.Skip(2));
 
             var length = contLength ?? result.UsedBytes;
             var fh = new FrameHeader

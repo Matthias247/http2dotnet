@@ -8,6 +8,7 @@ using Xunit.Abstractions;
 
 using Http2;
 using Http2.Hpack;
+using static Http2Tests.TestHeaders;
 
 namespace Http2Tests
 {
@@ -453,7 +454,7 @@ namespace Http2Tests
             // Establish a stream
             // When we send a response through it we should observe the size udpate
             var hEncoder = new Encoder();
-            await inPipe.WriteHeaders(hEncoder, 1, false, ServerStreamTests.DefaultGetHeaders);
+            await inPipe.WriteHeaders(hEncoder, 1, false, DefaultGetHeaders);
 
             // Wait for the incoming status headers with header update
             var fh = await outPipe.ReadFrameHeaderWithTimeout();
@@ -507,7 +508,7 @@ namespace Http2Tests
             // Establish a stream
             // When we send a response through it we should observe the size udpate
             var hEncoder = new Encoder();
-            await inPipe.WriteHeaders(hEncoder, 1, false, ServerStreamTests.DefaultGetHeaders);
+            await inPipe.WriteHeaders(hEncoder, 1, false, DefaultGetHeaders);
 
             var ok = await handlerDone.WaitAsync(
                 ReadableStreamTestExtensions.ReadTimeout);
