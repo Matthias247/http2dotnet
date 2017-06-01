@@ -113,6 +113,17 @@ namespace Http2
         public Task Done => readerDone;
 
         /// <summary>
+        /// Returns the current number of active streams
+        /// </summary>
+        public int ActiveStreamCount
+        {
+            get
+            {
+                lock (shared.Mutex) { return shared.streamMap.Count; }
+            }
+        }
+
+        /// <summary>
         /// Returns a Task that will be completed once a GoAway frame from the
         /// remote side was received.
         /// If the connection closes without a GoAway frame the Task will get
@@ -911,7 +922,7 @@ namespace Http2
                 }
 
                 // Check max concurrent streams
-                if (shared.streamMap.Count + 1 > localSettings.MaxConcurrentStreams)
+                if ((uint)shared.streamMap.Count + 1 > localSettings.MaxConcurrentStreams)
                 {
                     // Return an error which will trigger a reset frame for
                     // the new stream
