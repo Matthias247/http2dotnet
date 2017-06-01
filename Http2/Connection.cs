@@ -673,7 +673,6 @@ namespace Http2
 
             uint streamId = 0u;
             StreamImpl stream = null;
-            int remoteWindowSize = 0;
             lock (shared.Mutex)
             {
                 if (shared.Closed)
@@ -699,15 +698,10 @@ namespace Http2
                     (int)localSettings.InitialWindowSize);
 
                 shared.streamMap[streamId] = stream;
-
-                // TODO: This one faces a race condition. By the time
-                // that we have registered the stream with that size at the
-                // writer the size might already have changed.
-                remoteWindowSize = (int)remoteSettings.InitialWindowSize;
             }
 
             // Register that stream at the writer
-            if (!writer.RegisterStream(streamId, remoteWindowSize))
+            if (!writer.RegisterStream(streamId))
             {
                 // We can't register the stream at the writer
                 // This can happen if the writer is already closed
