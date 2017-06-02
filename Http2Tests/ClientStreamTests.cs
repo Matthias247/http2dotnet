@@ -159,6 +159,25 @@ namespace Http2Tests
         }
 
         [Fact]
+        public async Task ReceivingDataBeforeHeadersShouldYieldAResetException()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+
+            var res = await StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider,
+                inPipe, outPipe);
+
+            await inPipe.WriteData(1u, 1);
+            await outPipe.AssertResetStreamReception(1u, ErrorCode.ProtocolError);
+            var ex = await Assert.ThrowsAsync<AggregateException>(
+                () => res.stream.ReadWithTimeout(new ArraySegment<byte>(
+                    new byte[1])));
+            Assert.IsType<StreamResetException>(ex.InnerException);
+            Assert.Equal(StreamState.Reset, res.stream.State);
+        }
+
+        [Fact]
         public async Task ReceivingResetShouldYieldAResetException()
         {
             var inPipe = new BufferedPipe(1024);
@@ -174,21 +193,6 @@ namespace Http2Tests
             var ex = await Assert.ThrowsAsync<AggregateException>(
                 () => readTask);
             Assert.IsType<StreamResetException>(ex.InnerException);
-            Assert.Equal(StreamState.Reset, stream.State);
-        }
-
-        [Fact]
-        public async Task CancellingAStreamShouldSendAResetFrame()
-        {
-            var inPipe = new BufferedPipe(1024);
-            var outPipe = new BufferedPipe(1024);
-
-            var conn = await ConnectionUtils.BuildEstablishedConnection(
-                false, inPipe, outPipe, loggerProvider);
-            IStream stream = await conn.CreateStream(DefaultGetHeaders);
-            await outPipe.ReadAndDiscardHeaders(1u, false);
-            stream.Cancel();
-            await outPipe.AssertResetStreamReception(1, ErrorCode.Cancel);
             Assert.Equal(StreamState.Reset, stream.State);
         }
 
