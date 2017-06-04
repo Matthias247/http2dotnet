@@ -8,7 +8,7 @@ namespace Http2
     /// <summary>
     /// Utility methods for working with header lists
     /// </summary>
-    public static class HeaderListExtensionsUtils
+    internal static class HeaderListExtensionsUtils
     {
         /// <summary>
         /// Searches for a content-length field in the header list and extracts

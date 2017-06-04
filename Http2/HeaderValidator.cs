@@ -5,7 +5,7 @@ using Http2.Hpack;
 
 namespace Http2
 {
-    public enum HeaderValidationResult
+    internal enum HeaderValidationResult
     {
         /// <summary>Header fields are valid</summary>
         Ok,
@@ -31,7 +31,7 @@ namespace Http2
     /// <summary>
     /// Valides header field lists according to preset rules
     /// </summary>
-    public static class HeaderValidator
+    internal static class HeaderValidator
     {
         /// <summary>
         /// Validates the headerfields of HTTP/2 requests
