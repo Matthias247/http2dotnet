@@ -399,7 +399,8 @@ catch (ConnectionClosedException)
 ## Current limitations
 
 The library currently faces the following limitations:
-- Missing support for the push promises.
+- Missing support for HTTP/1.1 upgrades on client side.
+- Missing support for push promises.
 - Missing support for reading the remote SETTINGS from application side.
 - The scheduling of outgoing DATA frames is very basic and relies mostly on flow
   control windows and the maximum supported frame size. It is currently not
