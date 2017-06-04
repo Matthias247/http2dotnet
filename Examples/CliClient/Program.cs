@@ -1,9 +1,11 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Extensions.CommandLineUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Http2;
@@ -13,59 +15,211 @@ class Program
 {
     static void Main(string[] args)
     {
-        var mainTask = Task.Run(async () =>
+        var p = new Program();
+        try
         {
-            var p = new Program();
-            try
-            {
-                await p.RunAsync(args);
-            }
-            catch (Exception e)
-            {
-                p.logger.LogError("Error during exception:\n" + e.Message);
-            }
-        });
-        mainTask.Wait();
+            p.Run(args);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine("Error during execution:\n" + e.Message);
+        }
     }
+
+    bool verbose = false;
 
     ILoggerProvider logProvider;
     ILogger logger;
 
     string host;
     string scheme;
-    string method;
+    string method = "GET";
     string path;
     int port;
     string authority;
 
-    public Program()
+    /// Benchmark mode or not
+    bool isBenchmark = false;
+
+    // Benchmark related settings
+    int totalRequests = 10000;
+    int cpuCores = Environment.ProcessorCount;
+    int concurrentRequests = 1;
+
+    public void Run(string[] args)
     {
-        logProvider = new ConsoleLoggerProvider(
-            (s, level) => true, true);
-        logger = logProvider.CreateLogger("app");
+        var app = new CommandLineApplication();
+        app.Name = "CliClient";
+        app.HelpOption("-?|-h|--help");
+
+        var methodOption = app.Option(
+            "-X|--method",
+            "The HTTP method to use. The default is GET",
+            CommandOptionType.SingleValue);
+        var verboseOption = app.Option(
+            "-v|--verbose",
+            "Activate verbose logging",
+            CommandOptionType.NoValue);
+
+        var benchmarkOption = app.Option(
+            "--benchmark",
+            "Run in benchmark mode",
+            CommandOptionType.NoValue);
+         var cpuCoresOption = app.Option(
+            "-c|--cores",
+            "Override the number of CPU cores to use for benchmarks. " +
+            "By default the amount the available CPU cores will be utilized. " +
+            "This also equals the amount of utilized connections.",
+            CommandOptionType.SingleValue);
+        var numberRequestsOption = app.Option(
+            "-n|--nrRequests",
+            "The number of requests that should be performed in benchmark mode",
+            CommandOptionType.SingleValue);
+        var concurrentRequestsOption = app.Option(
+            "-m|--maxConcurrentRequests",
+            "The number of concurrent requests that should be performed in " +
+            "benchmark mode per connection",
+            CommandOptionType.SingleValue);
+
+        var uriArgument = app.Argument(
+            "uri",
+            "address to fetch");
+
+        app.OnExecute(async () =>
+        {
+            // Setup log filtering
+            Func<string, LogLevel, bool> logFilter =
+                (s, level) => level >= LogLevel.Information;
+            if (verboseOption.HasValue())
+            {
+                verbose = true;
+                logFilter = (s, level) => true;
+            }
+            logProvider = new ConsoleLoggerProvider(logFilter, true);
+            logger = logProvider.CreateLogger("app");
+
+            if (String.IsNullOrEmpty(uriArgument.Value))
+                throw new Exception(
+                    "Program requires at least url argument.\n" +
+                    "Example usage: dotnet run http://127.0.0.1:8888/");
+
+            var uri = new Uri(uriArgument.Value);
+            scheme = uri.Scheme.ToLowerInvariant();
+            host = uri.Host;
+            port = uri.Port;
+            path = uri.PathAndQuery;
+            authority = host + ":" + port;
+
+            if (methodOption.HasValue())
+                method = methodOption.Value();
+
+            if (benchmarkOption.HasValue())
+                isBenchmark = true;
+            if (cpuCoresOption.HasValue())
+            {
+                if (!Int32.TryParse(cpuCoresOption.Value(), out cpuCores) ||
+                    cpuCores < 1)
+                    throw new Exception("Invalid number of cpu cores");
+            }
+            if (numberRequestsOption.HasValue())
+            {
+                if (!Int32.TryParse(numberRequestsOption.Value(), out totalRequests) ||
+                    totalRequests < 1)
+                    throw new Exception("Invalid number of requests");
+            }
+            if (concurrentRequestsOption.HasValue())
+            {
+                if (!Int32.TryParse(concurrentRequestsOption.Value(), out concurrentRequests) ||
+                    concurrentRequests < 1)
+                    throw new Exception("Invalid number of concurrent requests");
+            }
+
+            if (scheme != "http")
+                throw new Exception("Only http scheme is supported");
+
+            if (isBenchmark)
+            {
+                await RunBenchmark();
+            }
+            else
+            {
+                await RunSingleRequest();
+            }
+
+            return 0;
+        });
+
+        if (args.Length < 1)
+        {
+            app.ShowHelp();
+        }
+        else
+        {
+            app.Execute(args);
+        }
     }
 
-    public async Task RunAsync(string[] args)
+    async Task RunSingleRequest()
     {
-        if (args.Length < 1)
-            throw new Exception(
-                "Program requires at least url argument.\n" +
-                "Example usage: dotnet run http://127.0.0.1:8888/");
-
-        method = "GET";
-        var uri = new Uri(args[args.Length - 1]);
-        scheme = uri.Scheme.ToLowerInvariant();
-        host = uri.Host;
-        port = uri.Port;
-        path = uri.PathAndQuery;
-        authority = host + ":" + port;
-
-        if (scheme != "http")
-            throw new Exception("Only http scheme is supported");
+        var sw = new System.Diagnostics.Stopwatch();
+        sw.Start();
 
         var conn = await CreateConnection(host, port);
         await PerformRequest(conn);
         await conn.GoAwayAsync(ErrorCode.NoError, true);
+
+        sw.Stop();
+        logger.LogInformation($"Elapsed time: {sw.Elapsed}");
+    }
+
+    async Task RunBenchmark()
+    {
+        // Make some adjustments:
+        // If the number of requests is smaller than the amount of cores then
+        // use lower core amount, since making half of a request doesn't make
+        // sense
+        if (totalRequests < cpuCores)
+            cpuCores = totalRequests;
+
+        logger.LogInformation(
+            $"Starting benchmark with following settings:\n" +
+            $"total requests: {totalRequests}\n" +
+            $"concurrent requests per connection: {concurrentRequests}\n" +
+            $"CPU cores and worker threads: {cpuCores}");
+
+        var requestsPerCore = totalRequests / cpuCores;
+
+        var sw = new System.Diagnostics.Stopwatch();
+        sw.Start();
+        var tasks = new Task[cpuCores];
+        for (var i = 0; i < cpuCores; i++)
+        {
+            tasks[i] = Task.Run(async () =>
+            {
+                var requestTasks = new Task[concurrentRequests];
+                var conn = await CreateConnection(host, port);
+                var remainingRequests = requestsPerCore;
+
+                while (remainingRequests > 0)
+                {
+                    var batchSize = Math.Min(remainingRequests, concurrentRequests);
+                    for (var j = 0; j < batchSize; j++)
+                    {
+                        requestTasks[j] = PerformRequest(conn);
+                    }
+                    await Task.WhenAll(requestTasks.Take(batchSize));
+                    remainingRequests -= batchSize;
+                }
+                await conn.GoAwayAsync(ErrorCode.NoError, true);
+            });
+        }
+        await Task.WhenAll(tasks);
+        sw.Stop();
+        logger.LogInformation($"Elapsed time: {sw.Elapsed}");
+
+        var requestsPerSecond =
+            (double)totalRequests / (double)sw.ElapsedMilliseconds * 1000.0;
+        logger.LogInformation($"{(int)requestsPerSecond} requests/s");
     }
 
     async Task PerformRequest(Connection conn)
@@ -82,33 +236,45 @@ class Program
 
         // Read the response headers
         var responseHeaders = await stream.ReadHeadersAsync();
-        // Print all of them
-        Console.WriteLine("Response headers:");
-        foreach (var hdr in responseHeaders)
+        if (!isBenchmark)
         {
-            Console.WriteLine($"{hdr.Name}: {hdr.Value}");
+            // Print all of them
+            Console.WriteLine("Response headers:");
+            foreach (var hdr in responseHeaders)
+            {
+                Console.WriteLine($"{hdr.Name}: {hdr.Value}");
+            }
         }
 
-        Console.WriteLine("Response body:");
+        // Console.WriteLine("Response body:");
         byte[] buf = new byte[8192];
         while (true)
         {
             var res = await stream.ReadAsync(new ArraySegment<byte>(buf));
             if (res.EndOfStream) break;
-            var text = Encoding.UTF8.GetString(buf, 0, res.BytesRead);
-            Console.WriteLine(text);
+            if (!isBenchmark)
+            {
+                var text = Encoding.UTF8.GetString(buf, 0, res.BytesRead);
+                Console.WriteLine(text);
+            }
         }
-        Console.WriteLine();
+        if (!isBenchmark)
+        {
+            Console.WriteLine();
+        }
 
         // Read the response trailers
         var responseTrailers = await stream.ReadTrailersAsync();
-        if (responseTrailers.Count() > 0)
+        if (!isBenchmark)
         {
-            // Print all of them
-            Console.WriteLine("Response trailers:");
-            foreach (var hdr in responseTrailers)
+            if (responseTrailers.Count() > 0)
             {
-                Console.WriteLine($"{hdr.Name}: {hdr.Value}");
+                // Print all of them
+                Console.WriteLine("Response trailers:");
+                foreach (var hdr in responseTrailers)
+                {
+                    Console.WriteLine($"{hdr.Name}: {hdr.Value}");
+                }
             }
         }
     }
@@ -132,11 +298,12 @@ class Program
         var wrappedStreams = tcpClient.Client.CreateStreams();
 
         // Build a HTTP connection on top of the stream abstraction
+        var connLogger = verbose ? logProvider.CreateLogger("HTTP2Conn") : null;
         var conn = new Connection(
             config, wrappedStreams.ReadableStream, wrappedStreams.WriteableStream,
             options: new Connection.Options
             {
-                Logger = logProvider.CreateLogger("HTTP2Conn"),
+                Logger = connLogger,
             });
 
         return conn;

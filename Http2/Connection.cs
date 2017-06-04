@@ -66,7 +66,7 @@ namespace Http2
         private class PingState
         {
             public ulong Counter = 0;
-            public Dictionary<ulong, TaskCompletionSource<bool>> PingMap =
+            public readonly Dictionary<ulong, TaskCompletionSource<bool>> PingMap =
                 new Dictionary<ulong, TaskCompletionSource<bool>>();
         }
 
@@ -77,7 +77,7 @@ namespace Http2
         private class ClientState
         {
             /// Allows to create only a single stream at a time
-            public SemaphoreSlim CreateStreamMutex = new SemaphoreSlim(1);
+            public readonly SemaphoreSlim CreateStreamMutex = new SemaphoreSlim(1);
         }
 
         private SharedData shared;

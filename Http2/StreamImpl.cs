@@ -28,9 +28,9 @@ namespace Http2
             }
         }
 
-        private Connection connection;
+        private readonly Connection connection;
         private StreamState state;
-        private object stateMutex = new object();
+        private readonly object stateMutex = new object();
 
         /// Allows only a single write at a time
         private SemaphoreSlim writeMutex = new SemaphoreSlim(1);
@@ -46,9 +46,12 @@ namespace Http2
         private List<HeaderField> inTrailers;
 
         // Semaphores for unblocking async access operations
-        private AsyncManualResetEvent readDataPossible = new AsyncManualResetEvent(false);
-        private AsyncManualResetEvent readHeadersPossible = new AsyncManualResetEvent(false);
-        private AsyncManualResetEvent readTrailersPossible = new AsyncManualResetEvent(false);
+        private readonly AsyncManualResetEvent readDataPossible =
+            new AsyncManualResetEvent(false);
+        private readonly AsyncManualResetEvent readHeadersPossible =
+            new AsyncManualResetEvent(false);
+        private readonly AsyncManualResetEvent readTrailersPossible =
+            new AsyncManualResetEvent(false);
 
         private long declaredInContentLength = -1;
         private long totalInData = 0;
