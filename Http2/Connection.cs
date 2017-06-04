@@ -70,7 +70,18 @@ namespace Http2
                 new Dictionary<ulong, TaskCompletionSource<bool>>();
         }
 
+        /// <summary>
+        /// Additional state if this is a client connection.
+        /// Not included a general members to save space for server-side connections.
+        /// </summary>
+        private class ClientState
+        {
+            /// Allows to create only a single stream at a time
+            public SemaphoreSlim CreateStreamMutex = new SemaphoreSlim(1);
+        }
+
         private SharedData shared;
+        private ClientState clientState;
 
         byte[] receiveBuffer;
 
@@ -156,6 +167,11 @@ namespace Http2
             if (config == null) throw new ArgumentNullException(nameof(config));
             this.config = config;
             this.logger = options?.Logger;
+
+            if (!config.IsServer)
+            {
+                clientState = new ClientState();
+            }
 
             // TODO: As long as they are not changeable there's actually no need for the field
             localSettings = config.Settings;
@@ -667,10 +683,31 @@ namespace Http2
         }
 
         /// <summary>
+        /// Returns true if the Connection is exhausted, which means no new
+        /// outgoing streams can be created. This will be the case when the
+        /// Connection is either closed or all valid Stream IDs have already
+        /// been utilized.
+        /// </summary>
+        public bool IsExhausted
+        {
+            get
+            {
+                lock (shared.Mutex)
+                {
+                    if (shared.Closed)
+                    {
+                        return true;
+                    }
+                    return shared.LastOutgoingStreamId > int.MaxValue - 2;
+                }
+            }
+        }
+
+        /// <summary>
         /// Creates a new Stream on top of the connection.
         /// This method may only be called on the client side of a connection.
         /// </summary>
-        public async Task<IStream> CreateStream(
+        public async Task<IStream> CreateStreamAsync(
             IEnumerable<Hpack.HeaderField> headers,
             bool endOfStream = false)
         {
@@ -678,50 +715,92 @@ namespace Http2
                 throw new NotSupportedException(
                     "Streams can only be created for clients");
 
+            // Validate headers upfront.
+            // They will also be validated before sending, but doing it upfront
+            // will avoid having to cleanup a stream in invalid state.
             var hvr = HeaderValidator.ValidateRequestHeaders(headers);
             if (hvr != HeaderValidationResult.Ok)
                 throw new Exception(hvr.ToString());
 
-            uint streamId = 0u;
-            StreamImpl stream = null;
-            lock (shared.Mutex)
+            // There needs to be a lock around stream creation, so that only
+            // a single stream can be created at one time.
+            // The reason for this is that the headers for a stream must be
+            // fully sent before those for the next stream can be sent - The
+            // remote side must see stream IDs in pure ascending order.
+            // Without the lock the sending the headers for a second CreateStream
+            // call could happen faster than for the first call in a multithreaded
+            // environment.
+            // An alternate way to mitigate this is that the ConnectionWriter
+            // won't write headers for a stream if those for a previous stream
+            // have not been sent. However that makes the reasoning in the
+            // ConnectionWriter much more complicated.
+            await clientState.CreateStreamMutex.WaitAsync();
+            try
             {
-                if (shared.Closed)
+                uint streamId = 0u;
+                StreamImpl stream = null;
+                lock (shared.Mutex)
                 {
-                    // Connection is already closed
+                    if (shared.Closed)
+                    {
+                        // Connection is already closed
+                        throw new ConnectionClosedException();
+                    }
+
+                    // Retrieve a stream ID for the new stream
+                    if (shared.LastOutgoingStreamId == 0)
+                        shared.LastOutgoingStreamId = 1;
+                    else if (shared.LastOutgoingStreamId <= int.MaxValue - 2)
+                        shared.LastOutgoingStreamId += 2;
+                    else
+                        throw new ConnectionExhaustedException();
+
+                    streamId = shared.LastOutgoingStreamId;
+
+                    // Create a stream
+                    stream = new StreamImpl(
+                        this, streamId,
+                        StreamState.Idle,
+                        (int)localSettings.InitialWindowSize);
+
+                    shared.streamMap[streamId] = stream;
+                }
+
+                // Register that stream at the writer
+                if (!writer.RegisterStream(streamId))
+                {
+                    // We can't register the stream at the writer
+                    // This can happen if the writer is already closed
+                    // In that case the streamMap will be cleaned up soon
                     throw new ConnectionClosedException();
                 }
 
-                // Retrieve a stream ID for the new stream
-                if (shared.LastOutgoingStreamId == 0)
-                    shared.LastOutgoingStreamId = 1;
-                else if (shared.LastOutgoingStreamId <= int.MaxValue - 2)
-                    shared.LastOutgoingStreamId += 2;
-                else
-                    throw new Exception("Out of Stream IDs");
+                if (logger != null && logger.IsEnabled(LogLevel.Trace))
+                {
+                    logger.LogTrace(
+                        "Created new outgoing stream with ID {0}",
+                        streamId);
+                }
 
-                streamId = shared.LastOutgoingStreamId;
-
-                // Create a stream
-                stream = new StreamImpl(
-                    this, streamId,
-                    StreamState.Idle,
-                    (int)localSettings.InitialWindowSize);
-
-                shared.streamMap[streamId] = stream;
+                // Write the headers
+                try
+                {
+                    await stream.WriteHeadersAsync(headers, endOfStream);
+                }
+                catch (Exception)
+                {
+                    // Transform all Exceptions into a ConnectionClosedException
+                    // to provide a uniform exception to the user. Actually
+                    // the write can only fail if the connection is closed, since
+                    // the headers have been validated upfront.
+                    throw new ConnectionClosedException();
+                }
+                return stream;
             }
-
-            // Register that stream at the writer
-            if (!writer.RegisterStream(streamId))
+            finally
             {
-                // We can't register the stream at the writer
-                // This can happen if the writer is already closed
-                // In that case the streamMap will be cleaned up soon
-                throw new ConnectionClosedException();
+                clientState.CreateStreamMutex.Release();
             }
-
-            await stream.WriteHeadersAsync(headers, endOfStream);
-            return stream;
         }
 
         /// <summary>
@@ -1623,5 +1702,20 @@ namespace Http2
     /// </summary>
     public class ConnectionClosedException : Exception
     {
+    }
+
+    /// <summary>
+    /// Signals that the connection is exhausted, which means no more streams
+    /// can be created because the maximum stream ID has been reached.
+    /// </summary>
+    public class ConnectionExhaustedException : Exception
+    {
+        public override string ToString()
+        {
+            return
+                "The Connection is exhausted as the maximum outgoing stream " +
+                "ID has already been utilized. To create additional streams a " +
+                "new Connection needs to be created";
+        }
     }
 }

@@ -55,7 +55,7 @@ namespace Http2Tests
                 if (state == StreamState.HalfClosedLocal ||
                     state == StreamState.Closed)
                     endOfStream = true;
-                var stream = await conn.CreateStream(
+                var stream = await conn.CreateStreamAsync(
                     DefaultGetHeaders, endOfStream: endOfStream);
                 await oPipe.ReadAndDiscardHeaders(1u, endOfStream);
 
@@ -127,7 +127,7 @@ namespace Http2Tests
             var conn = await ConnectionUtils.BuildEstablishedConnection(
                 false, inPipe, outPipe, loggerProvider);
 
-            var stream1Task = conn.CreateStream(DefaultGetHeaders, false);
+            var stream1Task = conn.CreateStreamAsync(DefaultGetHeaders, false);
             var stream1 = await stream1Task;
             Assert.Equal(StreamState.Open, stream1.State);
             Assert.Equal(1u, stream1.Id);
@@ -141,7 +141,7 @@ namespace Http2Tests
             await outPipe.ReadWithTimeout(new ArraySegment<byte>(hdrData));
             Assert.Equal(EncodedDefaultGetHeaders, hdrData);
 
-            var stream3Task = conn.CreateStream(DefaultGetHeaders, true);
+            var stream3Task = conn.CreateStreamAsync(DefaultGetHeaders, true);
             var stream3 = await stream3Task;
             Assert.Equal(StreamState.HalfClosedLocal, stream3.State);
             Assert.Equal(3u, stream3.Id);
@@ -156,6 +156,47 @@ namespace Http2Tests
             var hdrData3 = new byte[fh.Length];
             await outPipe.ReadWithTimeout(new ArraySegment<byte>(hdrData3));
             Assert.Equal(EncodedIndexedDefaultGetHeaders, hdrData3);
+        }
+
+        [Theory]
+        [InlineData(100)]
+        public async Task CreatedStreamsShouldAlwaysUseIncreasedStreamIds(
+            int nrStreams)
+        {
+            // This test checks if there are race conditions in the stream
+            // establish code
+            var inPipe = new BufferedPipe(10*1024);
+            var outPipe = new BufferedPipe(10*1024);
+            var conn = await ConnectionUtils.BuildEstablishedConnection(
+                false, inPipe, outPipe, loggerProvider);
+
+            var createStreamTasks = new Task<IStream>[nrStreams];
+            for (var i = 0; i < nrStreams; i++)
+            {
+                // Create the task in the threadpool
+                var t = Task.Run(
+                    () => conn.CreateStreamAsync(DefaultGetHeaders, false));
+                createStreamTasks[i] = t;
+            }
+
+            // Wait until all streams are open
+            await Task.WhenAll(createStreamTasks);
+            var streams = createStreamTasks.Select(t => t.Result).ToList();
+
+            // Check output data
+            // Sequence IDs must be always increasing
+            var buffer = new byte[Settings.Default.MaxFrameSize];
+            for (var i = 0; i < nrStreams; i++)
+            {
+                var expectedId = 1u + 2*i;
+                var fh = await outPipe.ReadFrameHeaderWithTimeout();
+                Assert.Equal(expectedId, fh.StreamId);
+                Assert.Equal(FrameType.Headers, fh.Type);
+                Assert.Equal((byte)HeadersFrameFlags.EndOfHeaders, fh.Flags);
+                // Discard header data
+                await outPipe.ReadWithTimeout(
+                    new ArraySegment<byte>(buffer, 0, fh.Length));
+            }
         }
 
         [Fact]
@@ -185,7 +226,7 @@ namespace Http2Tests
 
             var conn = await ConnectionUtils.BuildEstablishedConnection(
                 false, inPipe, outPipe, loggerProvider);
-            IStream stream = await conn.CreateStream(DefaultGetHeaders);
+            IStream stream = await conn.CreateStreamAsync(DefaultGetHeaders);
             await outPipe.ReadAndDiscardHeaders(1u, false);
 
             var readTask = stream.ReadWithTimeout(new ArraySegment<byte>(new byte[1]));
@@ -204,7 +245,7 @@ namespace Http2Tests
             var conn = await ConnectionUtils.BuildEstablishedConnection(
                 true, inPipe, outPipe, loggerProvider);
             var ex = await Assert.ThrowsAsync<NotSupportedException>(
-                () => conn.CreateStream(DefaultGetHeaders));
+                () => conn.CreateStreamAsync(DefaultGetHeaders));
             Assert.Equal("Streams can only be created for clients", ex.Message);
         }
     }

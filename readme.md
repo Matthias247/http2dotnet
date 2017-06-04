@@ -19,8 +19,7 @@ features have been implemented and there is already a pretty good test coverage.
 It was tested in a h2c with prior knowledge configuration against **nghttp2**
 and **h2load**. It was however not yet tested with an encrypted connection and
 a browser based client due a missing SSL connection with ALPN negotiation.
-Various features (especially for client side usage) have not yet been
-implemented (see Current limitations).
+Various features have not yet been implemented (see current limitations).
 
 ## Design goals
 
@@ -217,10 +216,66 @@ static async void HandleIncomingStream(IStream stream)
 }
 ```
 
+All `IStream` APIs are completely thread-safe, which means they can be used from
+an arbitrary thread. However the user application must still follow the basic
+HTTP/2 contracts, which e.g. means that now trailers may be sent before data was
+sent, and that neither data nor trailers might be sent if the end of the stream
+was already indicated.
+
+## Client stream creation
+
+The library can be used to build HTTP/2 clients. For this usecase outgoing
+`IStream`s need to be created, which represent the sent request. This can be
+achieved through the `Connection.CreateStreamAsync()` method, which creates a
+new outgoing stream. The user must pass all the required headers (including the
+pseudo-headers `:method`, `:path`, `:scheme` and optionally `:authority`) as an
+argument, as calling the method will directly lead to sending a HTTP/2 headers
+frame which the requested header fields. The method will return the newly
+created stream.
+
+Example for creating and using client stream, in case a HTTP/2 connection has
+already been established and configured for client-side use:
+
+```cs
+
+HeaderField[] headers = new HeaderField[]
+{
+    new HeaderField { Name = ":method", Value = "GET" },
+    new HeaderField { Name = ":scheme", Value = "http" },
+    new HeaderField { Name = ":path", Value = "/" },
+};
+
+var stream = await http2Connection.CreateStreamAsync(
+    headers, endOfStream: true);
+
+// Wait for response headers
+var reponseHeaders = await stream.ReadHeadersAsync();
+
+// Read response data
+var readDataResult = await stream.ReadAsync(buffer);
+```
+
+### Checking for stream ID exhaustion
+
+The HTTP/2 specification only allows 2^30 streams to be created on a single
+`Connection`. If a client requires to make more requests after some time it needs
+to create a new `Connection`. This library allows to check whether a new
+`Connection needs to be created` through the `Connection.IsExhausted` property,
+which will return `true` if no additional outgoing stream can be created.
+
+### Checking for the maximum concurrent streams limit of the remote side
+
+The library currently does not take the maximum concurrent streams setting into
+account, which is indicated by a remote through a HTTP/2 settings frame. This
+means it will try to create any amount of streams that the user requests, with
+the risk of the remote side resetting those streams. A future update might
+provide an additional possibility to check the current maximum concurrent stream
+limit.
+
 ## Server side connection upgrades
 
 *This section only applies to unsecure HTTP. In the case of HTTPS the protocol
-negiotiation would always happen by the means of Application-Layer Protocol
+negotiation must always happen by the means of Application-Layer Protocol
 Negotiation (ALPN).*
 
 ### Upgrading from HTTP/1.1
@@ -344,7 +399,6 @@ catch (ConnectionClosedException)
 ## Current limitations
 
 The library currently faces the following limitations:
-- Missing support for creating streams from client side.
 - Missing support for the push promises.
 - Missing support for reading the remote SETTINGS from application side.
 - The scheduling of outgoing DATA frames is very basic and relies mostly on flow
