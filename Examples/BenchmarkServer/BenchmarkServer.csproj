@@ -9,7 +9,7 @@
     <PackageReference Include="System.Threading.Tasks.Extensions" Version="*" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Http2\Http2.csproj" />
-    <ProjectReference Include="..\Hpack\Hpack.csproj" />
+    <ProjectReference Include="..\..\Http2\Http2.csproj" />
+    <ProjectReference Include="..\..\Hpack\Hpack.csproj" />
   </ItemGroup>
 </Project>

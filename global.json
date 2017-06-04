@@ -4,9 +4,9 @@
     "Http2",
     "HpackTests",
     "Http2Tests",
-    "ExampleServer",
-    "UpgradeExampleServer",
-    "BenchmarkServer"
+    "Examples/ExampleServer",
+    "Examples/UpgradeExampleServer",
+    "Examples/BenchmarkServer"
   ],
   "sdk": {
     "version": "1.0.0-rc4-004771"

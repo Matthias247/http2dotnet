@@ -10,13 +10,13 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Http2", "Http2\Http2.csproj
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Http2Tests", "Http2Tests\Http2Tests.csproj", "{71378047-112F-4CA9-816E-C629C6C12D5D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExampleServer", "ExampleServer\ExampleServer.csproj", "{4691A7A9-676C-4397-8AD4-26B455CFEFA4}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExampleServer", "Examples\ExampleServer\ExampleServer.csproj", "{4691A7A9-676C-4397-8AD4-26B455CFEFA4}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{5CE0394D-3F10-4E7F-B933-0D74666A5ABF}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "BenchmarkServer", "BenchmarkServer\BenchmarkServer.csproj", "{6D41A0A2-AAC8-4235-9217-8DDC2546642C}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "BenchmarkServer", "Examples\BenchmarkServer\BenchmarkServer.csproj", "{6D41A0A2-AAC8-4235-9217-8DDC2546642C}"
 EndProject
-Project("{13B669BE-BB05-4DDF-9536-439F39A36129}") = "UpgradeExampleServer", "UpgradeExampleServer\UpgradeExampleServer.csproj", "{FD5F12CD-ED26-4636-A451-7F9F4E080161}"
+Project("{13B669BE-BB05-4DDF-9536-439F39A36129}") = "UpgradeExampleServer", "Examples\UpgradeExampleServer\UpgradeExampleServer.csproj", "{FD5F12CD-ED26-4636-A451-7F9F4E080161}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
