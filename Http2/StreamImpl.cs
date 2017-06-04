@@ -131,7 +131,8 @@ namespace Http2
             }
         }
 
-        public async Task WriteHeadersAsync(IEnumerable<HeaderField> headers, bool endOfStream)
+        public Task WriteHeadersAsync(
+            IEnumerable<HeaderField> headers, bool endOfStream)
         {
             HeaderValidationResult hvr;
             // TODO: For push promises other validates might need to be used
@@ -142,6 +143,12 @@ namespace Http2
                 throw new Exception(hvr.ToString());
             }
 
+            return WriteValidatedHeadersAsync(headers, endOfStream);
+        }
+
+        internal async Task WriteValidatedHeadersAsync(
+            IEnumerable<HeaderField> headers, bool endOfStream)
+        {
             var removeStream = false;
 
             await writeMutex.WaitAsync();

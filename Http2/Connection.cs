@@ -785,14 +785,13 @@ namespace Http2
                 // Write the headers
                 try
                 {
-                    await stream.WriteHeadersAsync(headers, endOfStream);
+                    await stream.WriteValidatedHeadersAsync(headers, endOfStream);
                 }
                 catch (Exception)
                 {
                     // Transform all Exceptions into a ConnectionClosedException
                     // to provide a uniform exception to the user. Actually
-                    // the write can only fail if the connection is closed, since
-                    // the headers have been validated upfront.
+                    // the write can only fail if the connection is closed.
                     throw new ConnectionClosedException();
                 }
                 return stream;
