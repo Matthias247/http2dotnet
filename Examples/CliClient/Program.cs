@@ -64,10 +64,7 @@ class Program
             throw new Exception("Only http scheme is supported");
 
         var conn = await CreateConnection(host, port);
-        for (var i = 0; i < 30; i++)
-        {
-            await PerformRequest(conn);
-        }
+        await PerformRequest(conn);
         await conn.GoAwayAsync(ErrorCode.NoError, true);
     }
 
