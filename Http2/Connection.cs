@@ -28,6 +28,13 @@ namespace Http2
             /// triggered the upgrade.
             /// </summary>
             public ServerUpgradeRequest ServerUpgradeRequest;
+
+            /// <summary>
+            /// If the connection is established through an upgrade from HTTP/1,
+            /// then this contains the information about the request that
+            /// triggered the upgrade.
+            /// </summary>
+            public ClientUpgradeRequest ClientUpgradeRequest;
         }
 
         private struct SharedData
@@ -173,14 +180,14 @@ namespace Http2
                 clientState = new ClientState();
             }
 
-            // TODO: As long as they are not changeable there's actually no need for the field
             localSettings = config.Settings;
             // Disable server push as it's not supported.
             // Disabling it here is easier than wanting a custom config from the
             // user which disables it.
             localSettings.EnablePush = false;
 
-            // In case of an HTTP upgrade take the remote settings from there
+            // In case of a server side HTTP upgrade take the remote settings
+            // from there
             if (IsServer && options?.ServerUpgradeRequest != null)
             {
                 serverUpgradeRequest = options.Value.ServerUpgradeRequest;
@@ -217,6 +224,54 @@ namespace Http2
             shared.Closed = false;
             shared.PingState = null;
 
+            // In case of a client upgrade, directly register the upgrade stream
+            // in the stream map. This will assure that it's the first stream and
+            // we need no locking here in the constructor
+            if (!IsServer && options?.ClientUpgradeRequest != null)
+            {
+                var upgrade = options.Value.ClientUpgradeRequest;
+                if (!upgrade.IsValid)
+                {
+                    // Throw an exception in that case that this must be handled
+                    // from the outside
+                    throw new ArgumentException(
+                        "The ClientUpgradeRequest is invalid.\n" +
+                        "Invalid upgrade requests must be denied by the HTTP/1 " +
+                        "handler");
+                }
+
+                // Use the same settings which were communicated during the ugprade
+                localSettings = upgrade.Settings;
+
+                // Register the stream with ID1 in half-closed state
+                var newStream = new StreamImpl(
+                    this,
+                    1u,
+                    StreamState.HalfClosedLocal,
+                    (int)localSettings.InitialWindowSize);
+
+                shared.streamMap[1u] = newStream;
+                shared.LastOutgoingStreamId = 1u;
+                // Remark: There's no need for writer registration, as the
+                // client upgrade stream is halfclosedlocal and will never
+                // write anything.
+
+                // Fulfill the task, so that the client can get a reference
+                // to the stream.
+                var setStream =
+                    upgrade.UpgradeRequestStreamTcs.TrySetResult(newStream);
+                if (!setStream)
+                {
+                    if (logger != null && logger.IsEnabled(LogLevel.Error))
+                    {
+                        logger.LogError(
+                            "Could not set upgradeRequest stream, as the task was " +
+                            "already fulfilled. Has the ClientUpgradeRequest been " +
+                            "reused between multiple requests?");
+                    }
+                }
+            }
+
             // Clamp the dynamic table size limit to int range.
             // We will use the dynamic table size limit that was set for
             // receiving headers also for sending headers, which means to limit
@@ -239,6 +294,9 @@ namespace Http2
                     HuffmanStrategy = config.HuffmanStrategy,
                 }
             );
+            // As the writer will auto-start writing the local settings we have
+            // 1 unacked setting at startup
+            nrUnackedSettings++;
 
             headerReader = new HeaderReader(
                 new Hpack.Decoder(new Hpack.Decoder.Options
@@ -295,24 +353,6 @@ namespace Http2
         {
             try
             {
-                // Enqueue writing the local settings
-                // We do this before reading the preface since enqueuing these few
-                // bytes should not block and is cheap, and we can reuse the
-                // receiveBuffer for the write task.
-                // On the client side the preface will still be written before
-                // these settings, since it's handled by the ConnectionWriter.
-                EnsureBuffer(FrameHeader.HeaderSize + localSettings.RequiredSize);
-                var encodedSettingsBuf = new ArraySegment<byte>(
-                    receiveBuffer, 0, localSettings.RequiredSize);
-                localSettings.EncodeInto(encodedSettingsBuf);
-                await writer.WriteSettings(new FrameHeader{
-                    Type = FrameType.Settings,
-                    StreamId = 0,
-                    Flags = 0,
-                    Length = encodedSettingsBuf.Count,
-                }, encodedSettingsBuf);
-                nrUnackedSettings++;
-
                 // If this is a server we need to read the preface first,
                 // which is then followed by the remote SETTINGS
                 if (IsServer)
@@ -327,7 +367,7 @@ namespace Http2
 
                 var continueRead = true;
 
-                // In case of HTTP upgrade the request that caused the upgrade
+                // In case of HTTP server upgrade the request that caused the upgrade
                 // must be transformed into a HTTP/2 request which uses stream ID 1,
                 // and which will get pushed towards the user
                 if (serverUpgradeRequest != null)
@@ -357,7 +397,8 @@ namespace Http2
                         // Copy the payload into a buffer that's allocated by
                         // our allocator, to avoid problems with deallocation.
                         var buf = config.BufferPool.Rent(upgrade.Payload.Length);
-                        Array.Copy(upgrade.Payload, 0, buf, 0, upgrade.Payload.Length);
+                        Array.Copy(
+                            upgrade.Payload, 0, buf, 0, upgrade.Payload.Length);
 
                         // Directly also push the body into the stream
                         StreamImpl stream = null;

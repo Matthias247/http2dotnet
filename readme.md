@@ -365,6 +365,65 @@ abstraction. In the third case it depends on the approach for HTTP/1.1 parrsing
 and processing. It's the applications responsibility to transform all request
 kinds into a common `Request`/`Response` representation if needed.
 
+## Client side connection upgrades
+
+### Upgrading from HTTP/1.1
+
+The library supports HTTP connection upgrade requests on client side in a
+similar fashion as they are supported on the server side. Example code for how
+an upgrade can be performed can be found in the `CliExample`.
+
+In order to upgrade from HTTP/1.1 to HTTP/2, the user has to send a normal
+HTTP/1.1 request which contains the required `Upgrade` headers to the server.
+Sending this request over the underyling TCP connection is outside of the scope
+of this library.
+When the HTTP/1.1 response status line and headers are received the user code
+must check whether the upgrade was successful or not. In the success case a
+HTTP/2 `Connection` object can be constructed on top of the `Connection`. This
+`Connection` object obtain the ownership to the underlying streams (from which
+the HTTP/1.1 data already has been consumed) and an information about that the
+fact that the `Connection` was created as part of an `Upgrade`, because in this
+case one Stream will already be existing at startup.
+
+For performing client side upgrades, the first step is to create a
+`ClientUpgradeRequestBuilder`, which allows to configure the HTTP/2 settings
+which will be later on used. Through the `ClientUpgradeRequestBuilder.build()`
+method a `ClientUpgradeRequest` can be created. This `ClientUpgradeRequest` also
+exposes an `IsValid` property which reflects whether the upgrade request is valid.
+Only if the upgrade request is valid a HTTP/2 `Connection` object may be created.
+
+The `ClientUpgradeRequest` contains a `Base64EncodedSettings` property, which
+returns the base64 encoded settings which the user must send to the server
+inside the `Http2-Settings` header during the upgrade attempt.
+
+In case the user received a `HTTP/1.1 101 Switching Protocols` status a
+`Connection` object can be created on top of the underlying streams. The
+`Connection` must be informed about the pending upgrade attempt through the
+`Connection.Options.ClientUpgradeRequest` constructor option.
+
+The response for the HTTP/1.1 request which triggered the upgrade will in this
+case be delivered through a HTTP/2 stream, which will always utilize the
+Stream ID 1. As the stream was created implicitly through the upgrade and not
+due to calling `CreateStreamAsync()` the created `IStream` must be returned to
+the user in another fashion: The user can retrieve a reference to this first
+stream through the `ClientUpgradeRequest.UpgradeRequestStream` property, which
+returns a `Task<IStream>` which will be fulfilled once a `Connection` has been
+created which used the `UpgradeRequest`. Due to this fact a
+`ClientUpgradeRequest` instance may be not be reused for performing multiple
+connection upgrade requests. It will be bound to the first `Connection` to which
+it gets handed over.
+
+### Handling HTTP/2 (with and without upgrade) and HTTP/1 in parallel
+
+In order to handle HTTP/2 on client side with a possible fallback to HTTP/1.1
+for servers which do not support HTTP/1.1 the upgrade mechanism can be used:
+The first request form the client can be started as a HTTP/1.1 request, which
+contains the connection upgrade request in it's headers. If the server responds
+with `101 Switching Protocols` then a HTTP/2 connection can be established on
+top of this connection and the response of this request as well as further
+requests can be performed in HTTP/2 fashion. If the server ignores the upgrade
+the response must be normally processed with a HTTP/1.1 reader.
+
 ## Ping handling
 
 The library will automatically respond to received PING frames

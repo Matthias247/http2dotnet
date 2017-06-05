@@ -214,6 +214,14 @@ namespace Http2
                     }
                 }
 
+                // We always need to send the initial settings before
+                // anything else. This is an extra step to avoid a race condition
+                // with any other write or settings change request.
+                // As the settings are not changeable we can directly take them
+                // from the connection here. If they could be changed at some point
+                // of time then this would need to change too.
+                await WriteSettingsAsync(Connection.localSettings);
+
                 bool continueRun = true;
                 while (continueRun)
                 {
@@ -529,8 +537,7 @@ namespace Http2
                         await WriteWindowUpdateFrame(wr);
                         break;
                     case FrameType.Settings:
-                        await WriteSettingsFrameAsync(wr);
-                        break;
+                        throw new Exception("Settings changes are not supported");
                     default:
                         throw new Exception("Unknown frame type");
                 }
@@ -731,16 +738,15 @@ namespace Http2
                 false);
         }
 
+        [Obsolete("Updating and writing settings is not supported")]
         public ValueTask<WriteResult> WriteSettings(
             FrameHeader header, ArraySegment<byte> data)
         {
-            return PerformWriteRequestAsync(
-                0,
-                wr => {
-                    wr.Header = header;
-                    wr.Data = data;
-                },
-                false);
+            // This is here as a reminder.
+            // If settings changes get implemented then the direct writing of
+            // Connection.localSettings at the startup of the reader is no longer
+            // valid.
+            throw new NotSupportedException();
         }
 
         public ValueTask<WriteResult> WriteResetStream(
@@ -881,23 +887,24 @@ namespace Http2
         }
 
         /// <summary>
-        /// Writes a SETTINGS frame
+        /// Writes a SETTINGS frame which contains the encoded settings.
         /// </summary>
-        private Task WriteSettingsFrameAsync(WriteRequest wr)
+        private Task WriteSettingsAsync(Settings settings)
         {
-            wr.Header.Length = wr.Data.Count;
-            LogOutgoingFrameHeader(wr.Header);
-            var headerView = new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize);
-            wr.Header.EncodeInto(headerView);
-            // Copy the settings payload data into the outgoing array, so we only have 1 write
-            // The size check is omitted here since the size of outBuf will always exceed
-            // the size of settings that we write.
-            // The minimal value for outBuf/maxFrameSize is 16kB.
-            // Settings are only 6 * 6 byte currently.
-            Array.Copy(wr.Data.Array, wr.Data.Offset, outBuf, FrameHeader.HeaderSize, wr.Data.Count);
-            var totalSize = FrameHeader.HeaderSize + wr.Data.Count;
+            var fh = new FrameHeader
+            {
+                Type = FrameType.Settings,
+                StreamId = 0u,
+                Length = settings.RequiredSize,
+                Flags = 0,
+            };
+            LogOutgoingFrameHeader(fh);
+            fh.EncodeInto(
+                new ArraySegment<byte>(outBuf, 0, FrameHeader.HeaderSize));
+            settings.EncodeInto(new ArraySegment<byte>(
+                outBuf, FrameHeader.HeaderSize, settings.RequiredSize));
+            var totalSize = FrameHeader.HeaderSize + settings.RequiredSize;
             var data = new ArraySegment<byte>(outBuf, 0, totalSize);
-
             return this.outStream.WriteAsync(data);
         }
 

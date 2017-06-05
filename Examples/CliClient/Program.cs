@@ -38,6 +38,9 @@ class Program
     int port;
     string authority;
 
+    /// Whether to upgrade from HTTP/1.1
+    bool useHttp1Upgrade = false;
+
     /// Benchmark mode or not
     bool isBenchmark = false;
 
@@ -80,6 +83,10 @@ class Program
             "The number of concurrent requests that should be performed in " +
             "benchmark mode per connection",
             CommandOptionType.SingleValue);
+        var upgradeOption = app.Option(
+            "-u|--upgrade",
+            "Perform the request via HTTP/1.1 upgrade mechanism",
+            CommandOptionType.NoValue);
 
         var uriArgument = app.Argument(
             "uri",
@@ -113,6 +120,8 @@ class Program
             if (methodOption.HasValue())
                 method = methodOption.Value();
 
+            if (upgradeOption.HasValue())
+                useHttp1Upgrade = true;
             if (benchmarkOption.HasValue())
                 isBenchmark = true;
             if (cpuCoresOption.HasValue())
@@ -279,7 +288,14 @@ class Program
         }
     }
 
-    async Task<Connection> CreateConnection(string host, int port)
+    /// <summary>Create a HTTP/2 connection to the remote peer</summary>
+    Task<Connection> CreateConnection(string host, int port)
+    {
+        if (useHttp1Upgrade) return CreateUpgradeConnection(host, port);
+        else return CreateDirectConnection(host, port);
+    }
+
+    async Task<Connection> CreateDirectConnection(string host, int port)
     {
         // HTTP/2 settings
         var config =
@@ -307,5 +323,101 @@ class Program
             });
 
         return conn;
+    }
+
+    async Task<Connection> CreateUpgradeConnection(string host, int port)
+    {
+        // HTTP/2 settings
+        var config =
+            new ConnectionConfigurationBuilder(false)
+            .UseSettings(Settings.Default)
+            .UseHuffmanStrategy(HuffmanStrategy.IfSmaller)
+            .Build();
+
+        // Prepare connection upgrade
+        var upgrade =
+            new ClientUpgradeRequestBuilder()
+            .SetHttp2Settings(config.Settings)
+            .Build();
+
+        // Create a TCP connection
+        logger.LogInformation($"Starting to connect to {host}:{port}");
+        var tcpClient = new TcpClient();
+        await tcpClient.ConnectAsync(host, port);
+        tcpClient.Client.NoDelay = true;
+        logger.LogInformation("Connected to remote");
+
+        // Create HTTP/2 stream abstraction on top of the socket
+        var wrappedStreams = tcpClient.Client.CreateStreams();
+        var upgradeReadStream = new UpgradeReadStream(wrappedStreams.ReadableStream);
+
+        var needExplicitStreamClose = true;
+        try
+        {
+            // Send a HTTP/1.1 upgrade request with the necessary fields
+            var upgradeHeader =
+                "OPTIONS / HTTP/1.1\r\n" +
+                "Host: " + host + "\r\n" +
+                "Connection: Upgrade, HTTP2-Settings\r\n" +
+                "Upgrade: h2c\r\n" +
+                "HTTP2-Settings: " + upgrade.Base64EncodedSettings + "\r\n\r\n";
+            logger.LogInformation("Sending upgrade request:\n" + upgradeHeader);
+            var encodedHeader = Encoding.ASCII.GetBytes(upgradeHeader);
+            await wrappedStreams.WriteableStream.WriteAsync(
+                new ArraySegment<byte>(encodedHeader));
+
+            // Wait for the upgrade response
+            await upgradeReadStream.WaitForHttpHeader();
+            var headerBytes = upgradeReadStream.HeaderBytes;
+
+            logger.LogInformation(
+                "Received HTTP/1.1 response: " +
+                Encoding.ASCII.GetString(headerBytes.Array, 0, headerBytes.Count));
+
+            // Try to parse the upgrade response as HTTP/1 status and check whether
+            // the upgrade was successful.
+            var response = Http1Response.ParseFrom(
+                Encoding.ASCII.GetString(
+                    headerBytes.Array, headerBytes.Offset, headerBytes.Count-4));
+            // Mark the HTTP/1.1 bytes as read
+            upgradeReadStream.ConsumeHttpHeader();
+
+            if (response.StatusCode != "101")
+                throw new Exception("Upgrade failed");
+            if (!response.Headers.Any(hf => hf.Key == "connection" && hf.Value == "Upgrade") ||
+                !response.Headers.Any(hf => hf.Key == "upgrade" && hf.Value == "h2c"))
+                throw new Exception("Upgrade failed");
+
+            logger.LogInformation("Connection upgrade succesful!");
+
+            // If we get here then the connection will be reponsible for closing
+            // the stream
+            needExplicitStreamClose = false;
+
+            // Build a HTTP connection on top of the stream abstraction
+            var connLogger = verbose ? logProvider.CreateLogger("HTTP2Conn") : null;
+            var conn = new Connection(
+                config, upgradeReadStream, wrappedStreams.WriteableStream,
+                options: new Connection.Options
+                {
+                    Logger = connLogger,
+                    ClientUpgradeRequest = upgrade,
+                });
+
+            // Retrieve the response stream for the connection upgrade.
+            var upgradeStream = await upgrade.UpgradeRequestStream;
+            // As we made the upgrade via a dummy OPTIONS request we are not
+            // really interested in the result of the upgrade request
+            upgradeStream.Cancel();
+
+            return conn;
+        }
+        finally
+        {
+            if (needExplicitStreamClose)
+            {
+                await wrappedStreams.WriteableStream.CloseAsync();
+            }
+        }
     }
 }
