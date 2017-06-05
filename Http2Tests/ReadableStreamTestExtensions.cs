@@ -10,7 +10,7 @@ namespace Http2Tests
 {
     public static class ReadableStreamTestExtensions
     {
-        public const int ReadTimeout = 250;
+        public const int ReadTimeout = 350;
 
         public static async Task<StreamReadResult> ReadWithTimeout(
             this IReadableByteStream stream, ArraySegment<byte> buf)

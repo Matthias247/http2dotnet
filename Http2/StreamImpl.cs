@@ -37,7 +37,15 @@ namespace Http2
         private bool headersSent = false;
         private bool dataSent = false;
 
-        private bool headersReceived = false;
+        private enum HeaderReceptionState : byte
+        {
+            ReceivedNoHeaders,
+            ReceivedInformationalHeaders,
+            ReceivedAllHeaders,
+        }
+        private HeaderReceptionState headersReceived =
+            HeaderReceptionState.ReceivedNoHeaders;
+
         private bool dataReceived = false;
         // A trailersReceived field is not necessary, since receiving trailers
         // moves the state to HalfClosedRemote
@@ -597,7 +605,18 @@ namespace Http2
                 {
                     throw new StreamResetException();
                 }
-                if (inHeaders != null) result = inHeaders;
+                if (inHeaders != null)
+                {
+                    result = inHeaders;
+                    // If the headers which are read are the informatianal headers
+                    // we reset the received headers, so that they can be
+                    // replaced by the real headers later on.
+                    if (result.IsInformationalHeaders())
+                    {
+                        inHeaders = null;
+                        readHeadersPossible.Reset();
+                    }
+                }
                 else result = EmptyHeaders;
             }
             return result;
@@ -652,20 +671,15 @@ namespace Http2
                         // Open can mean we have already received headers
                         // (in case we are a server) or not (in case we are
                         // a client and only have sent headers)
-                        // If headers were already before there must be a
-                        // data frame in between and these are trailers.
+                        // If headers were already received before there must be
+                        // a data frame in between and these are trailers.
                         // An exception is if we are client, where we can
                         // receive informational headers and normal headers.
-                        // This required no data in between. And that the
-                        // received headers contain a 1xy status code
-                        // Trailers must have EndOfStream set.
-                        // Decision for the current point of time:
-                        // Don't support informational frames, since there is
-                        // no way to store the second headers
-                        // This must be handled on a higher layer.
-                        // On this layer we will reset the stream if we get
-                        // additional headers
-                        if (!headersReceived)
+                        // This requires no data in between. These header must
+                        // contain a 1xy status code.
+                        // Trailers must have the EndOfStream flag set and must
+                        // always follow after a data frame.
+                        if (headersReceived != HeaderReceptionState.ReceivedAllHeaders)
                         {
                             // We are receiving headers
                             HeaderValidationResult hvr;
@@ -686,7 +700,24 @@ namespace Http2
                                     Message = "Received invalid headers",
                                 };
                             }
-                            headersReceived = true;
+
+                            if (!connection.config.IsServer &&
+                                headers.Headers.IsInformationalHeaders())
+                            {
+                                // Clients support the reception of informational headers.
+                                // If this is only an informational header we might
+                                // receive additional headers later on.
+                                headersReceived =
+                                    HeaderReceptionState.ReceivedInformationalHeaders;
+                            }
+                            else
+                            {
+                                // Servers don't support informational headers at all.
+                                // And if we are client and directly receive response
+                                // headers it's also fine.
+                                headersReceived =
+                                    HeaderReceptionState.ReceivedAllHeaders;
+                            }
                             wakeupHeaderWaiter = true;
                             // TODO: Uncompress cookie headers here?
                             declaredInContentLength = headers.Headers.GetContentLength();
@@ -842,7 +873,7 @@ namespace Http2
                         throw new NotImplementedException();
                     case StreamState.Open:
                     case StreamState.HalfClosedLocal:
-                        if (!headersReceived)
+                        if (headersReceived != HeaderReceptionState.ReceivedAllHeaders)
                         {
                             // Received DATA without HEADERS before.
                             // State Open can also mean we only have sent
@@ -852,7 +883,7 @@ namespace Http2
                             {
                                 StreamId = Id,
                                 Code = ErrorCode.ProtocolError,
-                                Message = "Received data before headers",
+                                Message = "Received data before all headers",
                             };
                         }
 

@@ -396,6 +396,46 @@ catch (ConnectionClosedException)
 }
 ```
 
+## Informational headers
+
+The library supports sending informational headers (HTTP status code in the 1xy
+range) on server side and receiving them on client side.
+
+To send informational headers on server side the user can simply call
+`stream.WriteHeadersAsync` multiple times. It is possible to send multiple
+sets of informational headers before the set of headers with the final status
+code is written. Only the final header set may set `endOfStream` to `true`.
+Users should not write data before a header with a final `:status` code (outside
+of the 100 range) was sent - because this would be detected as a protocol error
+on the client side.
+
+To receive informational headers on the client side the `stream.ReadHeadersAsync()`
+may be called multiple times on the client side in the special case where one call
+returns headers with a `status: 1xy` field. In these cases the next call to
+`ReadHeadersAsync()` will block until the next set of headers (either informational
+or of the final response) will be received.
+
+Example:
+
+```cs
+var headers = await stream.ReadHeadersAsync();
+if (headers.First(h => h.Name == ":status").Value == "100")
+{
+    // Received only informational headers
+    headers = await stream.ReadHeadersAsync();
+    // headers now contains the next set of received headers.
+}
+```
+
+**Remark:**
+
+If the server sends multiple sets of informational headers and possibly the
+final headers before the user calls `stream.ReadHeadersAsync()`, this call will
+only deliver the last delivered set of headers to the user. The headers are not
+queued internally but overwritten. However for known use-cases of informational
+headers (the `100 Continue` header) this causes no problem, since the server
+will only send more headers after user interaction (sending data).
+
 ## Current limitations
 
 The library currently faces the following limitations:

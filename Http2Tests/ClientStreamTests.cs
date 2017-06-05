@@ -248,5 +248,106 @@ namespace Http2Tests
                 () => conn.CreateStreamAsync(DefaultGetHeaders));
             Assert.Equal("Streams can only be created for clients", ex.Message);
         }
+
+        [Fact]
+        public async Task ClientsShouldBeAbleToReceiveInformationalHeaders()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            var res = await StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe);
+
+            // Send and receive first set of informational headers
+            var readInfoHeaders1Task = res.stream.ReadHeadersAsync();
+            Assert.False(readInfoHeaders1Task.IsCompleted);
+
+            var infoHeaders1 = new HeaderField[]
+            {
+                new HeaderField { Name = ":status", Value = "100" },
+                new HeaderField { Name = "extension-field", Value = "bar" },
+            };
+            await inPipe.WriteHeaders(res.hEncoder, 1u, false, infoHeaders1);
+
+            var recvdInfoHeaders1 = await readInfoHeaders1Task;
+            Assert.True(infoHeaders1.SequenceEqual(recvdInfoHeaders1));
+
+            // Send and receive second set of informational headers
+            var readInfoHeaders2Task = res.stream.ReadHeadersAsync();
+            Assert.False(readInfoHeaders2Task.IsCompleted);
+
+            var infoHeaders2 = new HeaderField[]
+            {
+                new HeaderField { Name = ":status", Value = "108" },
+                new HeaderField { Name = "extension-field-b", Value = "bar2" },
+            };
+            await inPipe.WriteHeaders(res.hEncoder, 1u, false, infoHeaders2);
+
+            var recvdInfoHeaders2 = await readInfoHeaders2Task;
+            Assert.True(infoHeaders2.SequenceEqual(recvdInfoHeaders2));
+
+            // Send and receive final headers
+            var recvHeadersTask = res.stream.ReadHeadersAsync();
+            Assert.False(recvHeadersTask.IsCompleted);
+            await inPipe.WriteHeaders(res.hEncoder, 1u, true, DefaultStatusHeaders);
+            var recvdHeaders = await recvHeadersTask;
+            Assert.True(DefaultStatusHeaders.SequenceEqual(recvdHeaders));
+        }
+
+        [Fact]
+        public async Task ReceivingAnInformationalHeaderAfterANormalHeaderShouldBeAnError()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            var res = await StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe);
+
+            await inPipe.WriteHeaders(res.hEncoder, 1u, false, DefaultStatusHeaders);
+            // Expect to receive the status headers
+            var recvdHeaders = await res.stream.ReadHeadersAsync();
+            Assert.True(DefaultStatusHeaders.SequenceEqual(recvdHeaders));
+
+            // Send informational headers to the client
+            var infoHeaders = new HeaderField[]
+            {
+                new HeaderField { Name = ":status", Value = "100" },
+                new HeaderField { Name = "extension-field", Value = "bar" },
+            };
+            await inPipe.WriteHeaders(res.hEncoder, 1u, false, infoHeaders);
+
+            // Expect to receive an error
+            await outPipe.AssertResetStreamReception(1u, ErrorCode.ProtocolError);
+            Assert.Equal(StreamState.Reset, res.stream.State);
+
+            await Assert.ThrowsAsync<StreamResetException>(
+                () => res.stream.ReadHeadersAsync());
+        }
+
+        [Fact]
+        public async Task ReceivingDataDirectlyAfterInformationalHeadersShouldBeAnError()
+        {
+            var inPipe = new BufferedPipe(1024);
+            var outPipe = new BufferedPipe(1024);
+            var res = await StreamCreator.CreateConnectionAndStream(
+                StreamState.Open, loggerProvider, inPipe, outPipe);
+
+            // Send informational headers to the client
+            var infoHeaders = new HeaderField[]
+            {
+                new HeaderField { Name = ":status", Value = "100" },
+                new HeaderField { Name = "extension-field", Value = "bar" },
+            };
+            await inPipe.WriteHeaders(res.hEncoder, 1u, false, infoHeaders);
+            var recvdHeaders = await res.stream.ReadHeadersAsync();
+            Assert.True(infoHeaders.SequenceEqual(recvdHeaders));
+
+            // Try to send data
+            await inPipe.WriteData(1u, 100, null, true);
+            // Expect to receive an error
+            await outPipe.AssertResetStreamReception(1u, ErrorCode.ProtocolError);
+            Assert.Equal(StreamState.Reset, res.stream.State);
+
+            await Assert.ThrowsAsync<StreamResetException>(
+                () => res.stream.ReadHeadersAsync());
+        }
     }
 }
