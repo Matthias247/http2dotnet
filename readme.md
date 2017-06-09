@@ -1,6 +1,8 @@
 http2dotnet
 ===========
 
+**Nuget package:** [http2dotnet](http://www.nuget.org/packages/http2dotnet/)
+
 This library implements the HTTP/2 and HPACK protocol for .NET standard.
 The goal of the library is to cover all protocol handling parts of the HTTP/2
 ([RFC7540](http://httpwg.org/specs/rfc7540.html)) and HPACK
@@ -495,10 +497,30 @@ queued internally but overwritten. However for known use-cases of informational
 headers (the `100 Continue` header) this causes no problem, since the server
 will only send more headers after user interaction (sending data).
 
+## Performance considerations
+
+For achieving the best possible performance the following things should be
+considered:
+
+- The IO stream abstractions which are handed over to the `Connection` should be
+  optimized for handling small writes and reads in a fast way. E.g. the library
+  might often try to read or write only a few bytes, like the header of a HTTP/2
+  frame. In this case the IO operation should operate synchronously if possible.
+  The TCP socket wrappers which are provided inside this library (see
+  `SocketExtensions.CreateStreams()`) e.g. provide this behavior by trying to
+  perform synchronous nonblocking read and write operations before falling back
+  into async behavior.
+- The library will try to allocate all send and receive buffers from a custom
+  `ArrayPool<byte>` allocator which can be provided by the user through the
+  `ConnectionConfigurationBuilder.UseBufferPool()` setting. If no allocator is
+  specified the `ArrayPool<byte>.Shared` is used, which might not be optimal for
+  HTTP/2 operations. The library will use the allocator to allocate buffers of
+  up to `Settings.MaxFrameSize` bytes in normal operation. Therefore the
+  configured allocator can be optimized for these kind of buffer sizes.
+
 ## Current limitations
 
 The library currently faces the following limitations:
-- Missing support for HTTP/1.1 upgrades on client side.
 - Missing support for push promises.
 - Missing support for reading the remote SETTINGS from application side.
 - The scheduling of outgoing DATA frames is very basic and relies mostly on flow
