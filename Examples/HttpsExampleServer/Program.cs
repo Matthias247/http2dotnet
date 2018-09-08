@@ -1,8 +1,15 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Reflection;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
@@ -15,7 +22,7 @@ class Program
     {
         var logProvider = new ConsoleLoggerProvider((s, level) => true, true);
         // Create a TCP socket acceptor
-        var listener = new TcpListener(IPAddress.Any, 8888);
+        var listener = new TcpListener(IPAddress.Any, 8889);
         listener.Start();
         Task.Run(() => AcceptTask(listener, logProvider)).Wait();
     }
@@ -29,7 +36,32 @@ class Program
     static byte[] responseBody = Encoding.ASCII.GetBytes(
         "<html><head>Hello World</head><body>Content</body></html>");
 
-    private static System.Net.Security.SslServerAuthetnicationOptions options;
+    private static SslServerAuthenticationOptions options = new SslServerAuthenticationOptions()
+    {
+        // get our self signed certificate
+        ServerCertificate = new X509Certificate2(ReadWholeStream(Assembly.GetExecutingAssembly()
+            .GetManifestResourceStream("HttpsExampleServer.localhost.p12"))),
+        // this line adds ALPN, critical for HTTP2 over SSL
+        ApplicationProtocols = new List<SslApplicationProtocol>(){SslApplicationProtocol.Http2},
+        ClientCertificateRequired = false,
+        CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+        EnabledSslProtocols = SslProtocols.Tls12
+    };
+
+    static byte[] ReadWholeStream(Stream stream)
+    {
+        byte[] buffer = new byte[16 * 1024];
+        using (MemoryStream ms = new MemoryStream())
+        {
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                ms.Write(buffer, 0, read);
+            }
+
+            return ms.ToArray();
+        }
+    }
 
     static async void HandleIncomingStream(IStream stream)
     {
@@ -53,9 +85,10 @@ class Program
             }
 
             // Send a response which consists of headers and a payload
-            var responseHeaders = new HeaderField[] {
-                new HeaderField { Name = ":status", Value = "200" },
-                new HeaderField { Name = "content-type", Value = "text/html" },
+            var responseHeaders = new HeaderField[]
+            {
+                new HeaderField {Name = ":status", Value = "200"},
+                new HeaderField {Name = "content-type", Value = "text/html"},
             };
             await stream.WriteHeadersAsync(responseHeaders, false);
             await stream.WriteAsync(new ArraySegment<byte>(
@@ -79,22 +112,22 @@ class Program
 
         var config =
             new ConnectionConfigurationBuilder(true)
-            .UseStreamListener(AcceptIncomingStream)
-            .UseSettings(settings)
-            .UseHuffmanStrategy(HuffmanStrategy.IfSmaller)
-            .Build();
+                .UseStreamListener(AcceptIncomingStream)
+                .UseSettings(settings)
+                .UseHuffmanStrategy(HuffmanStrategy.IfSmaller)
+                .Build();
 
         while (true)
         {
             // Accept TCP sockets
             var clientSocket = await listener.AcceptSocketAsync();
             clientSocket.NoDelay = true;
-            // Create HTTP/2 stream abstraction on top of the socket
-            var wrappedStreams = clientSocket.CreateStreams();
-            // Alternatively on top of a System.IO.Stream
-            //var netStream = new NetworkStream(clientSocket, true);
-            //var wrappedStreams = netStream.CreateStreams();
-
+            // Create an SSL stream
+            var sslStream = new SslStream(new NetworkStream(clientSocket, true));
+            // Authenticate on the stream
+            await sslStream.AuthenticateAsServerAsync(options,CancellationToken.None);
+            // wrap the SslStream
+            var wrappedStreams = sslStream.CreateStreams();
             // Build a HTTP connection on top of the stream abstraction
             var http2Con = new Connection(
                 config, wrappedStreams.ReadableStream, wrappedStreams.WriteableStream,
