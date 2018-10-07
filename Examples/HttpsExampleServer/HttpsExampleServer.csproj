@@ -12,7 +12,6 @@
     
     <ItemGroup>
         <EmbeddedResource Include="..\Shared\localhost.p12" />
-        <Compile Include="..\Shared\ExampleShared.cs" />
     </ItemGroup>
 
     <ItemGroup>

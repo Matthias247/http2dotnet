@@ -10,7 +10,7 @@
     <PackageReference Include="System.Threading.Tasks.Extensions" Version="*" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="..\Shared\*.cs" Exclude="..\Shared\ExampleShared.cs" />
+    <Compile Include="..\Shared\*.cs" />
     <ProjectReference Include="..\..\Http2\Http2.csproj" />
     <ProjectReference Include="..\..\Hpack\Hpack.csproj" />
   </ItemGroup>
