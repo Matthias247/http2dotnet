@@ -277,9 +277,14 @@ limit.
 ## Server side connection upgrades
 
 ### Upgrading over HTTPS
-Over HTTPS, the server and client negotiate a protocol using Application Layer Protocol Negotiation. This is done before data is sent, so both the client and server know what protocol to use before handling the connection, so if we instruct the client to use HTTP/2, the connection is already HTTP/2 by the time we get it. Clever, isn't it!
+Over HTTPS, the server and client negotiate a protocol using Application Layer 
+Protocol Negotiation. This is done before data is sent, so both the client and 
+server know what protocol to use before handling the connection, so if we 
+instruct the client to use HTTP/2, the connection is already HTTP/2 by the
+time we get it.
 
-Example code for how an upgrade can be performed over HTTPS can be found in the `HttpsExampleServer`.
+Example code for how an upgrade can be performed over HTTPS can be found in 
+the `HttpsExampleServer`.
 
 ### Upgrading from HTTP/1.1
 

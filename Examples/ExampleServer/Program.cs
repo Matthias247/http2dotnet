@@ -29,8 +29,6 @@ class Program
     static byte[] responseBody = Encoding.ASCII.GetBytes(
         "<html><head>Hello World</head><body>Content</body></html>");
 
-    private static System.Net.Security.SslServerAuthetnicationOptions options;
-
     static async void HandleIncomingStream(IStream stream)
     {
         try
