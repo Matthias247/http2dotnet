@@ -320,6 +320,10 @@ class Program
                 },
             };
             await stream.AuthenticateAsClientAsync(options, default(CancellationToken));
+            if (stream.NegotiatedApplicationProtocol != SslApplicationProtocol.Http2)
+            {
+                throw new NotSupportedException("HTTP2 is not supported by the remote host.");
+            }
             logger.LogInformation("SSL Authenticated");
             var result = stream.CreateStreams();
             return (result.ReadableStream, result.WriteableStream);
