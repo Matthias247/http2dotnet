@@ -361,6 +361,10 @@ class Program
 
     async Task<Connection> CreateUpgradeConnection(string scheme, string host, int port)
     {
+        if (scheme == "https")
+        {
+            throw new NotSupportedException("Upgrade is not supported when using HTTPS");
+        }
         // HTTP/2 settings
         var config =
             new ConnectionConfigurationBuilder(false)
