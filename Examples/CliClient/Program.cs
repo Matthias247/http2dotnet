@@ -384,7 +384,8 @@ class Program
         var needExplicitStreamClose = true;
         try
         {
-            var upgradeValue = scheme == "https" ? "h2" : "h2c";
+            // Upgrades are only possible for non-encrypted connections.
+            var upgradeValue = "h2c";
             // Send a HTTP/1.1 upgrade request with the necessary fields
             var upgradeHeader =
                 "OPTIONS / HTTP/1.1\r\n" +
