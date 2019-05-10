@@ -385,7 +385,7 @@ class Program
         try
         {
             // Upgrades are only possible for non-encrypted connections.
-            var upgradeValue = "h2c";
+            var upgradeValue = "h2";
             // Send a HTTP/1.1 upgrade request with the necessary fields
             var upgradeHeader =
                 "OPTIONS / HTTP/1.1\r\n" +
