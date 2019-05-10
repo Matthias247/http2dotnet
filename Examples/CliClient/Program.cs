@@ -1,9 +1,13 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.CommandLineUtils;
 using Microsoft.Extensions.Logging;
@@ -143,8 +147,8 @@ class Program
                     throw new Exception("Invalid number of concurrent requests");
             }
 
-            if (scheme != "http")
-                throw new Exception("Only http scheme is supported");
+            if (scheme != "http" && scheme != "https")
+                throw new Exception("Only http and https schemes are supported");
 
             if (isBenchmark)
             {
@@ -173,7 +177,7 @@ class Program
         var sw = new System.Diagnostics.Stopwatch();
         sw.Start();
 
-        var conn = await CreateConnection(host, port);
+        var conn = await CreateConnection(scheme, host, port);
         await PerformRequest(conn);
         await conn.GoAwayAsync(ErrorCode.NoError, true);
 
@@ -206,7 +210,7 @@ class Program
             tasks[i] = Task.Run(async () =>
             {
                 var requestTasks = new Task[concurrentRequests];
-                var conn = await CreateConnection(host, port);
+                var conn = await CreateConnection(scheme, host, port);
                 var remainingRequests = requestsPerCore;
 
                 while (remainingRequests > 0)
@@ -289,13 +293,50 @@ class Program
     }
 
     /// <summary>Create a HTTP/2 connection to the remote peer</summary>
-    Task<Connection> CreateConnection(string host, int port)
+    Task<Connection> CreateConnection(string scheme, string host, int port)
     {
-        if (useHttp1Upgrade) return CreateUpgradeConnection(host, port);
-        else return CreateDirectConnection(host, port);
+        if (useHttp1Upgrade) return CreateUpgradeConnection(scheme, host, port);
+        else return CreateDirectConnection(scheme, host, port);
     }
 
-    async Task<Connection> CreateDirectConnection(string host, int port)
+    async Task<(IReadableByteStream, IWriteAndCloseableByteStream)> CreateStreams(string scheme, string host, int port)
+    {
+        // Create a TCP connection
+        logger.LogInformation($"Starting to connect to {scheme}://{host}:{port}");
+        var tcpClient = new TcpClient();
+        await tcpClient.ConnectAsync(host, port);
+        logger.LogInformation("Connected to remote");
+        tcpClient.Client.NoDelay = true;
+        if (scheme == "https")
+        {
+            var stream = new SslStream(tcpClient.GetStream());
+            logger.LogInformation("Negotiating SSL...");
+            var options = new SslClientAuthenticationOptions
+            {
+                TargetHost = host,
+                ApplicationProtocols = new List<SslApplicationProtocol>
+                {
+                    SslApplicationProtocol.Http2
+                },
+            };
+            await stream.AuthenticateAsClientAsync(options, default(CancellationToken));
+            if (stream.NegotiatedApplicationProtocol != SslApplicationProtocol.Http2)
+            {
+                throw new NotSupportedException("HTTP2 is not supported by the remote host.");
+            }
+            logger.LogInformation("SSL Authenticated");
+            var result = stream.CreateStreams();
+            return (result.ReadableStream, result.WriteableStream);
+        }
+        else
+        {
+            // Create HTTP/2 stream abstraction on top of the socket
+            var result = tcpClient.Client.CreateStreams();
+            return (result.ReadableStream, result.WriteableStream);
+        }
+    }
+
+    async Task<Connection> CreateDirectConnection(string scheme, string host, int port)
     {
         // HTTP/2 settings
         var config =
@@ -304,19 +345,12 @@ class Program
             .UseHuffmanStrategy(HuffmanStrategy.IfSmaller)
             .Build();
 
-        // Create a TCP connection
-        logger.LogInformation($"Starting to connect to {host}:{port}");
-        var tcpClient = new TcpClient();
-        await tcpClient.ConnectAsync(host, port);
-        logger.LogInformation("Connected to remote");
-        tcpClient.Client.NoDelay = true;
-        // Create HTTP/2 stream abstraction on top of the socket
-        var wrappedStreams = tcpClient.Client.CreateStreams();
+        var (readableStream, writeableStream) = await CreateStreams(scheme, host, port);
 
         // Build a HTTP connection on top of the stream abstraction
         var connLogger = verbose ? logProvider.CreateLogger("HTTP2Conn") : null;
         var conn = new Connection(
-            config, wrappedStreams.ReadableStream, wrappedStreams.WriteableStream,
+            config, readableStream, writeableStream,
             options: new Connection.Options
             {
                 Logger = connLogger,
@@ -325,8 +359,12 @@ class Program
         return conn;
     }
 
-    async Task<Connection> CreateUpgradeConnection(string host, int port)
+    async Task<Connection> CreateUpgradeConnection(string scheme, string host, int port)
     {
+        if (scheme == "https")
+        {
+            throw new NotSupportedException("Upgrade is not supported when using HTTPS");
+        }
         // HTTP/2 settings
         var config =
             new ConnectionConfigurationBuilder(false)
@@ -340,30 +378,24 @@ class Program
             .SetHttp2Settings(config.Settings)
             .Build();
 
-        // Create a TCP connection
-        logger.LogInformation($"Starting to connect to {host}:{port}");
-        var tcpClient = new TcpClient();
-        await tcpClient.ConnectAsync(host, port);
-        tcpClient.Client.NoDelay = true;
-        logger.LogInformation("Connected to remote");
-
-        // Create HTTP/2 stream abstraction on top of the socket
-        var wrappedStreams = tcpClient.Client.CreateStreams();
-        var upgradeReadStream = new UpgradeReadStream(wrappedStreams.ReadableStream);
+        var (readableStream, writeableStream) = await CreateStreams(scheme, host, port);
+        var upgradeReadStream = new UpgradeReadStream(readableStream);
 
         var needExplicitStreamClose = true;
         try
         {
+            // Upgrades are only possible for non-encrypted connections.
+            var upgradeValue = "h2";
             // Send a HTTP/1.1 upgrade request with the necessary fields
             var upgradeHeader =
                 "OPTIONS / HTTP/1.1\r\n" +
                 "Host: " + host + "\r\n" +
                 "Connection: Upgrade, HTTP2-Settings\r\n" +
-                "Upgrade: h2c\r\n" +
+                $"Upgrade: {upgradeValue}\r\n" +
                 "HTTP2-Settings: " + upgrade.Base64EncodedSettings + "\r\n\r\n";
             logger.LogInformation("Sending upgrade request:\n" + upgradeHeader);
             var encodedHeader = Encoding.ASCII.GetBytes(upgradeHeader);
-            await wrappedStreams.WriteableStream.WriteAsync(
+            await writeableStream.WriteAsync(
                 new ArraySegment<byte>(encodedHeader));
 
             // Wait for the upgrade response
@@ -388,16 +420,16 @@ class Program
                 !response.Headers.Any(hf => hf.Key == "upgrade" && hf.Value == "h2c"))
                 throw new Exception("Upgrade failed");
 
-            logger.LogInformation("Connection upgrade succesful!");
+            logger.LogInformation("Connection upgrade successful!");
 
-            // If we get here then the connection will be reponsible for closing
+            // If we get here then the connection will be responsible for closing
             // the stream
             needExplicitStreamClose = false;
 
             // Build a HTTP connection on top of the stream abstraction
             var connLogger = verbose ? logProvider.CreateLogger("HTTP2Conn") : null;
             var conn = new Connection(
-                config, upgradeReadStream, wrappedStreams.WriteableStream,
+                config, upgradeReadStream, writeableStream,
                 options: new Connection.Options
                 {
                     Logger = connLogger,
@@ -416,7 +448,7 @@ class Program
         {
             if (needExplicitStreamClose)
             {
-                await wrappedStreams.WriteableStream.CloseAsync();
+                await writeableStream.CloseAsync();
             }
         }
     }
