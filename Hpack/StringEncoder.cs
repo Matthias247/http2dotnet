@@ -27,7 +27,7 @@ namespace Http2.Hpack
         /// </summary>
         public static int GetByteLength(string value)
         {
-            return Encoding.ASCII.GetByteCount(value);
+            return Encoding.UTF8.GetByteCount(value);
         }
 
         /// <summary>
@@ -61,7 +61,7 @@ namespace Http2.Hpack
             // Check if the string should be reencoded with huffman encoding
             if (huffman == HuffmanStrategy.Always || huffman == HuffmanStrategy.IfSmaller)
             {
-                huffmanInputBuf = Encoding.ASCII.GetBytes(value);
+                huffmanInputBuf = Encoding.UTF8.GetBytes(value);
                 requiredHuffmanBytes = Huffman.EncodedLength(
                     new ArraySegment<byte>(huffmanInputBuf));
                 if (huffman == HuffmanStrategy.IfSmaller && requiredHuffmanBytes < encodedByteLen)
@@ -97,8 +97,8 @@ namespace Http2.Hpack
             else
             {
                 if (free < valueByteLen) return -1;
-                // Use ASCII encoder to write bytes to target buffer
-                used = Encoding.ASCII.GetBytes(
+                // Use UTF-8 encoder for maximum compatibility when writing bytes to the target buffer
+                used = Encoding.UTF8.GetBytes(
                     value, 0, value.Length, buf.Array, offset);
                 offset += used;
             }
@@ -117,9 +117,9 @@ namespace Http2.Hpack
         public static byte[] Encode(string value, HuffmanStrategy huffman)
         {
             // Estimate the size of the buffer
-            var asciiSize = Encoding.ASCII.GetByteCount(value);
-            var estimatedHeaderLength = IntEncoder.RequiredBytes(asciiSize, 0, 7);
-            var estimatedBufferSize = estimatedHeaderLength + asciiSize;
+            var utf8Size = Encoding.UTF8.GetByteCount(value);
+            var estimatedHeaderLength = IntEncoder.RequiredBytes(utf8Size, 0, 7);
+            var estimatedBufferSize = estimatedHeaderLength + utf8Size;
 
             while (true)
             {
@@ -127,7 +127,7 @@ namespace Http2.Hpack
                 var buf = new byte[estimatedBufferSize + 16];
                 // Try to serialize value in there
                 var size = EncodeInto(
-                    new ArraySegment<byte>(buf), value, asciiSize, huffman);
+                    new ArraySegment<byte>(buf), value, utf8Size, huffman);
                 if (size != -1)
                 {
                     // Serialization was performed
