@@ -169,9 +169,9 @@ namespace Http2.Hpack
                 }
                 else
                 {
-                    // TODO: Check if encoding is really correct
+                    // UTF-8 encoding should be used to support non-ASCII header names and values
                     this.Result =
-                        Encoding.ASCII.GetString(view.Array, view.Offset, view.Count);
+                        Encoding.UTF8.GetString(view.Array, view.Offset, view.Count);
                 }
                 // TODO: Optionally check here for valid HTTP/2 header names
                 this.Done = true;

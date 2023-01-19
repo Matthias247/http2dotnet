@@ -110,8 +110,8 @@ namespace Http2.Hpack
             }
 
             // Convert the buffer into a string
-            // TODO: Check if encoding is really correct
-            var str = Encoding.ASCII.GetString(outBuf, 0, byteCount);
+            // UTF-8 encoding should be used to support non-ASCII header names and values
+            var str = Encoding.UTF8.GetString(outBuf, 0, byteCount);
             pool.Return(outBuf);
             return str;
         }
